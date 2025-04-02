@@ -1,0 +1,3903 @@
+# Programa para dimensionamento de muros de arrimo à flexão
+
+# Importando bibliotecas necessárias
+import math
+import numpy as np
+import subprocess
+import sys
+import matplotlib.pyplot as plt
+import tkinter as tk
+from tkinter import messagebox
+import plotly.graph_objects as go
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
+# Função para instalar pré-requisitos
+def verificar_instalar_requisitos():
+    """
+    Verifica se os pacotes necessários estão instalados e os instala se necessário
+    """
+    requisitos = ['plotly', 'numpy']
+    
+    def instalar_pacote(pacote):
+        print(f"Instalando {pacote}...")
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", pacote])
+            print(f"{pacote} instalado com sucesso!")
+            return True
+        except subprocess.CalledProcessError:
+            print(f"Erro ao instalar {pacote}. Por favor, instale manualmente usando: pip install {pacote}")
+            return False
+
+    todos_instalados = True
+    for req in requisitos:
+        try:
+            __import__(req)
+            print(f"{req} já está instalado.")
+        except ImportError:
+            print(f"{req} não encontrado.")
+            if not instalar_pacote(req):
+                todos_instalados = False
+    
+    if not todos_instalados:
+        print("\nAlguns pacotes não puderam ser instalados. Por favor, instale-os manualmente.")
+        sys.exit(1)
+    
+    print("\nTodos os requisitos estão instalados!")
+    return True
+
+
+def dimensionar_muro_arrimo_flexao(h, b, d, gamma_solo, phi, fck, fyk, ka):
+    print("=== Dimensionamento de Muro de Arrimo à Flexão ===")
+    
+    # Cálculo do empuxo ativo (Teoria de Rankine)
+    ea = 0.5 * gamma_solo * h**2 * ka  # Empuxo ativo total
+                # Talvez aqui usar o empuxo inclinado pra fazer o paramento de montante inclinado?
+    
+    # Momento fletor na base
+    momento = ea * h/3  # kN.m/m
+    
+    # Dimensionamento estrutural
+    # d = h/12  # Altura útil estimada - Não usei esse na última revisão
+    fcd = fck/1.4  # Resistência de cálculo do concreto
+    fyd = fyk/1.15  # Resistência de cálculo do aço
+    
+    # Cálculo da área de aço necessária
+    # Realiza cálculo resumido de armadura (armadura simples)
+
+    # print(momento, b , d, fcd)  
+    a = (momento * 100 / (0.425 * 100 * (d*100-5)**2 * fcd / 10))
+    # print(a)
+    # 0.425 * b * d * d * fcd / 10
+    x = 1.25*d * (1 - (1 - a)**0.5)
+    # print(x/(h-d))
+
+    if x/(h-d) < 0:
+        print("Domínio 1: x é negativo.")
+    elif 0 <= x/(h-d) <= 0.25:
+        print("Domínio 2: x está entre 0 e 0.25.")
+    elif 0.25 < x/(h-d) <= 0.45:
+        print("Domínio 3: x está entre 0.25 e 0.45.")
+    else:
+        print("Domínio 4: x é maior que 0.45.")
+
+    # Verificar se kmd está dentro do limite
+    if x/(h-d) > 0.5:
+        print("ALERTA: Momento muito grande para a seção - Recomendado aumentar a altura útil!")
+        return
+        
+    # print(x)
+
+    as_calc = momento * 1.4 / (((d * 100-5)-0.4 * x) * fyd) * 1000  # Área de aço calculada em cm²
+    
+    # Área de aço mínima
+    as_min = 0.15/100 * b * h * 100  # cm²
+    
+    # Área de aço final
+    as_final = round(max(as_calc, as_min), 2) # Pega o maior entre o mínimo e calculado
+    
+    # Apresentação dos resultados
+    print("\n=== Resultados ===")
+    print(f"Empuxo ativo total: {ea:.2f} kN/m")
+    print(f"Momento fletor na base: {momento:.2f} kN.m/m")
+    print(f"Área de aço necessária: {as_final:.2f} cm²/m")
+    
+    # Sugestão de armadura
+    print("\nSugestão de armadura:")
+    diametros = [5, 6.3, 8, 10, 12.5, 16, 20, 25, 32]  # diâmetros disponíveis em mm
+    if as_final > 0:  # Verifica se a área de aço final é válida
+        for dia_barra in diametros:
+            area_barra = math.pi * (dia_barra/10)**2 / 4  # área de uma barra em cm²
+            espacamento = area_barra * 100 / as_final
+            
+            # Aplicar limites (acha espaçamentos entre 5 e 20 cm) mas verificar se atende a área necessária
+            espacamento_ajustado = max(5, min(espacamento, 20))
+            
+            # Verificar se com o espaçamento ajustado a área é suficiente
+            if (area_barra * 100 / espacamento_ajustado) >= as_final:
+                print(f"Usar φ {dia_barra}mm a cada {espacamento_ajustado:.1f}cm")
+                break
+    else:
+        print("Área de aço necessária é inválida.")
+    
+    return dia_barra, espacamento
+
+def calcular_empuxo_inclinado(h, beta, phi, gamma_solo, delta):
+    """
+    Calcula o empuxo ativo para paramentos inclinados
+    Parâmetros:
+    h: altura do muro (m) - Altura total do muro de contenção
+    beta: ângulo de inclinação do terreno (graus) - Ângulo que o terreno faz com a horizontal
+    phi: ângulo de atrito interno do solo (graus) - Parâmetro de resistência do solo
+    gamma_solo: peso específico do solo (kN/m³) - Peso por unidade de volume do solo
+    delta: ângulo de atrito solo-muro (graus) - Ângulo de atrito entre o solo e a parede do muro
+    
+    Retorna:
+    ea_inclinado: Empuxo ativo total considerando a inclinação (kN/m)
+    ea_horizontal: Componente horizontal do empuxo (kN/m)
+    ea_vertical: Componente vertical do empuxo (kN/m)
+    """
+    # Conversão dos ângulos de graus para radianos para cálculos trigonométricos
+    beta_rad = math.radians(beta)
+    phi_rad = math.radians(phi)
+    delta_rad = math.radians(delta)
+    
+    # Cálculo do coeficiente de empuxo ativo para paramento inclinado (Ka)
+    # Fórmula de Coulomb considerando inclinação do terreno e atrito solo-muro
+    numerador = math.cos(phi_rad - beta_rad)**2
+    
+    termo1 = (1 + math.sqrt((math.sin(phi_rad + delta_rad) * math.sin(phi_rad - beta_rad)) / 
+              (math.cos(delta_rad) * math.cos(beta_rad))))**2
+    
+    ka_inclinado = numerador / (math.cos(delta_rad)**2 * termo1)
+    
+    # Cálculo do empuxo ativo total usando a fórmula: Ea = 1/2 * γ * H² * Ka
+    ea_inclinado = 0.5 * gamma_solo * h**2 * ka_inclinado
+    
+    # Decomposição do empuxo em componentes horizontal e vertical
+    # Considerando o ângulo de atrito solo-muro (delta)
+    ea_horizontal = ea_inclinado * math.cos(delta_rad)
+    ea_vertical = ea_inclinado * math.sin(delta_rad)
+    
+    return ea_inclinado, ea_horizontal, ea_vertical
+
+def calcular_peso_terra_montante(h, b_mont, gamma_solo, beta=0):
+    """
+    Calcula o peso de terra sobre a laje de montante do muro
+    
+    Parâmetros:
+    h: altura do muro (m)
+    b_mont: largura da base a montante (m)
+    gamma_solo: peso específico do solo (kN/m³) 
+    beta: ângulo de inclinação do terreno (graus)
+    
+    Retorna:
+    peso_terra: peso total do solo sobre a laje (kN/m)
+    x_cg: posição do centro de gravidade em relação à face do muro (m)
+    volume_aterro: volume de aterro (m³)
+    volume_corte: volume de corte (m³)
+    """
+    # Conversão do ângulo beta para radianos
+    beta_rad = math.radians(beta)
+    
+    # Área do solo retangular sobre a laje
+    area_ret = h * b_mont
+    
+    # Cálculo do volume de corte simplificado
+    volume_corte = b_mont * h + (h - 1)**2 / 2 if h > 1 else b_mont * h  # Considerando escavação em 45º
+    
+    # Cálculo do volume de aterro
+    area_tri = 0
+    if beta != 0:
+        altura_tri = b_mont * math.tan(beta_rad)
+        area_tri = b_mont * altura_tri / 2
+    
+    # Peso total do solo
+    peso_terra = area_ret * gamma_solo + volume_corte * gamma_solo
+    
+    # Cálculo do centro de gravidade
+    momento_ret = (b_mont/2) * area_ret * gamma_solo
+    momento_corte = (b_mont / 2) * volume_corte * gamma_solo
+    x_cg = (momento_ret + momento_corte) / peso_terra
+    
+    # Cálculo do volume de aterro
+    volume_aterro = peso_terra / gamma_solo  # Volume de aterro considerando a área triangular
+    
+    return peso_terra, x_cg, volume_aterro, volume_corte  # Retornando também os volumes de aterro e corte
+
+def plotar_muro_arrimo(b_jus, b_mon, h, d, as_final, gamma_solo, tensao_max, pressao_adm, resultados_estabilidade):
+    plt.close('all')  # Fecha todas as figuras existentes
+    """
+    Plota a seção do muro de arrimo com as cotas utilizadas e uma visualização dos quantitativos dos materiais utilizados.
+    
+    Parâmetros:
+    b_jus: Largura da base do muro a jusante (m)
+    b_mon: Largura da base do muro a montante (m)
+    h: Altura do muro (m)
+    d: Altura útil (m)
+    as_final: Área de aço final (cm²)
+    gamma_solo: Peso específico do solo (kN/m³)
+    tensao_max: Tensão máxima calculada na base (kN/m²)
+    pressao_adm: Pressão admissível do solo (kN/m²)
+    resultados_estabilidade: Dicionário com os resultados de estabilidade
+    """
+    # Criar figura com subplots
+    fig, axs = plt.subplots(2, 2, figsize=(14, 6))
+
+    # Plotar a seção do muro de arrimo
+    axs[0,0].plot([0, 0, d, d, 0], [0, h, h, 0, 0], color='gray', linewidth=2)  # Muro
+    axs[0,0].fill_between([0, b_mon], 0, d, color='gainsboro', alpha=0.5)  # Área do muro
+
+    axs[0,0].plot([0, 0, -b_jus, b_mon, 0], [d, 0, 0, d, d], color='gainsboro', linewidth=2)  # Contorno da base
+    axs[0,0].fill_between([0, -b_jus], 0, d, color='gainsboro', alpha=0.5)  # Base do muro
+
+    axs[0,0].fill_between([d, b_mon], d, h, color='saddlebrown', alpha=0.5, label='Terra')  # Terra acima da base
+    axs[0,0].fill_between([b_mon, b_mon + 1], d, h, color='saddlebrown', alpha=0.5)  # Terra à direita do muro
+
+    axs[0,0].text((b_jus + b_mon)/2, -0.2, f'Base: {b_jus + b_mon} m', ha='center', va='top', fontsize=10)
+    axs[0,0].text(-0.2, h/2, f'Altura: {h} m', ha='right', va='center', fontsize=10, rotation='vertical')
+    axs[0,0].text((b_jus + b_mon)/2, d, f'Altura útil: {d} m', ha='center', va='bottom', fontsize=10)
+    axs[0,0].text(b_mon + 0.5, h/2, f'Área de Aço: {as_final} cm²', ha='left', va='center', fontsize=10, rotation='vertical')
+
+    axs[0,0].set_xlim(-0.5 - b_jus, b_mon + 0.5)
+    axs[0,0].set_ylim(-0.5, h + 0.5)
+    axs[0,0].set_aspect('equal')
+    axs[0,0].set_title('Seção do Muro de Arrimo à Flexão')
+    axs[0,0].set_xlabel('Base (m)')
+    axs[0,0].set_ylabel('Altura (m)')
+    axs[0,0].grid()
+    axs[0,0].legend()  # Adiciona legenda
+
+    # Adicionar informação da pressão admissível
+    axs[0,1].text(0, -0.8, f"Pressão Admissível: {pressao_adm:.2f} kN/m²", ha='left', va='top', fontsize=10)
+    axs[0,1].text(0, -1.6, f"Tensão Máxima: {tensao_max:.2f} kN/m²", ha='left', va='top', fontsize=10)
+    
+    # Adicionar informações sobre a base teórica necessária e a comparação com a base máxima
+    b_total = b_jus + b_mon
+    if 'base_teorica' in resultados_estabilidade:
+        base_teorica = resultados_estabilidade['base_teorica']
+        base_ok = resultados_estabilidade.get('base_ok', False)
+        base_atual_ok = resultados_estabilidade.get('base_atual_ok', False)
+        base_max_ok = resultados_estabilidade.get('base_max_ok', True)
+        
+        # Mostrar informações sobre a base
+        axs[0,1].text(0, -2.4, f"Base Atual: {b_total:.2f} m", ha='left', va='top', fontsize=10)
+        axs[0,1].text(0, -3.2, f"Base Teórica Necessária: {base_teorica:.2f} m", ha='left', va='top', fontsize=10)
+        
+        # Status da base atual
+        status_base_atual = "Sim" if base_atual_ok else "Não"
+        cor_status_atual = "green" if base_atual_ok else "red"
+        axs[0,1].text(0, -4.0, f"Base Atual Suficiente: {status_base_atual}", ha='left', va='top', fontsize=10, color=cor_status_atual)
+        
+        # Status da base máxima
+        status_base_max = "Sim" if base_max_ok else "Não"
+        cor_status_max = "green" if base_max_ok else "red"
+        axs[0,1].text(0, -4.8, f"Dentro do Limite Máximo: {status_base_max}", ha='left', va='top', fontsize=10, color=cor_status_max)
+        
+        # Mensagem geral sobre adequação da base
+        status_geral = "Sim" if base_ok else "Não"
+        cor_status_geral = "green" if base_ok else "red"
+        axs[0,1].text(0, -5.6, f"Base Adequada: {status_geral}", ha='left', va='top', fontsize=12, fontweight='bold', color=cor_status_geral)
+        
+        # Adicionar uma mensagem destacada sobre a adequação da base
+        if not base_ok:
+            mensagens = []
+            if not base_atual_ok:
+                mensagens.append(f"Base atual insuficiente (necessário +{base_teorica - b_total:.2f}m)")
+            if not base_max_ok:
+                mensagens.append(f"Base teórica excede o limite máximo permitido")
+            
+            if mensagens:
+                plt.figtext(0.5, 0.01, " | ".join(mensagens), 
+                          ha='center', fontsize=12, color='red',
+                          bbox={"facecolor":"yellow", "alpha":0.5, "pad":5})
+
+    # Plotar os quantitativos dos materiais
+    volume_concreto = (b_mon + b_jus + h) * d  # Volume em m³
+    peso_terra, x_cg, volume_aterro, volume_corte = calcular_peso_terra_montante(h, b_mon, gamma_solo)
+   
+    solo_corte, _, _, _ = calcular_peso_terra_montante(h, b_mon, gamma_solo)  # Captura apenas o peso
+    solo_aterro = volume_aterro  # Exemplo de valor para Solo - Aterro
+    solo_carga = volume_aterro - volume_concreto  # Exemplo de valor para Solo - Carga
+
+    materiais = ['Área de Aço (cm²)', 'Volume de Concreto (m³)', 'Solo - Corte (m³)', 'Solo - Aterro (m³)', 'Solo - Carga [+] / Descarga [-](m³)']
+    quantidades = [as_final, volume_concreto, solo_corte, solo_aterro, solo_carga]
+
+    """
+    # 1. Cálculos geométricos e de peso
+    area_muro = 0.5 * (b_mon - crista) * h + crista * h
+    volume_concreto = area_muro
+    peso_muro = volume_concreto * gamma_concreto
+    peso_solo = 0.5 * (b_mon - crista) * h * gamma_solo
+    
+    # 2. Cálculo do empuxo ativo
+
+    ea = 0.5 * gamma_solo * h**2 * ka
+    
+    # 3. Verificação ao Deslizamento
+    fs_deslizamento = c * b_mon / (ea * fs_coesao) + (peso_muro + peso_solo)*math.tan(math.radians(phi)) / (ea * fs_atrito)
+
+    # 4. Centro de gravidade do muro (distância da base)
+    y_cg = h/3 * (2*crista + b_mon)/(crista + b_mon)
+
+    # 4. Verificação ao Tombamento
+    braco_estabilizante = ((b_mon - crista)/3 + crista) - b_mon/2 # Em relação ao centro da base
+    terra_estabilizante = ((b_mon - crista)*2/3 + crista) - b_mon/2    # Em relação ao centro da base
+    braco_tombamento = h/3
+    fs_tombamento = (peso_muro*braco_estabilizante + peso_solo*terra_estabilizante) / (ea*braco_tombamento)
+    
+    # 5. Verificação de Tensões na Base
+    excentricidade = (b_mon)/2 - ((peso_muro*braco_estabilizante + peso_solo*terra_estabilizante) - ea*braco_tombamento)/(peso_muro + peso_solo)
+    momento_inercia = (1/12)*(b_mon)**3
+    momento_total = peso_muro*braco_estabilizante + peso_solo*terra_estabilizante - ea*braco_tombamento
+    tensao_max = (momento_total*(b_mon)/2)/momento_inercia + (peso_muro + peso_solo)/(b_mon)
+    tensao_min = (momento_total*(b_mon)/2)/momento_inercia - (peso_muro + peso_solo)/(b_mon)
+    """
+
+    axs[1,0].set_title('Quantitativos dos Materiais')
+    axs[1,0].set_ylabel('Quantidade')
+    axs[1,0].set_ylim(-1, len(materiais))  # Define o limite do eixo y para garantir que todos os textos sejam visíveis
+    
+    # Relatório de Estabilidade (telinha do lado direito)
+    relatorio = (
+        f"Resumo do Quantitativo:\n"
+        f"1. Área de Aço: {as_final:.2f} cm²/m\n"
+        f"2. Volume de Concreto: {volume_concreto:.2f} m³/m\n"
+        f"3. Volume de Solo - Corte: {solo_corte:.2f} m³/m\n"
+        f"4. Volume de Solo - Aterro: {solo_aterro:.2f} m³/m\n"
+        f"5. Volume de Solo - Carga [+] / Descarga [-]: {solo_carga:.2f} m³/m\n"
+
+        f"Relatório de Estabilidade (caso de carregamento normal):\n"
+        f"1. Fator de Segurança ao Deslizamento: {resultados_estabilidade['fs_deslizamento_total']:.2f} "
+        f"{'(OK)' if resultados_estabilidade['fs_deslizamento_ok'] else '(NÃO OK - RISCO DE DESLIZAMENTO)'}\n"
+        f"2. Fator de Segurança ao Tombamento: {abs(resultados_estabilidade['fs_tombamento']):.2f} "
+        f"{'(OK)' if abs(resultados_estabilidade['fs_tombamento_ok']) else '(NÃO OK - RISCO DE TOMBAMENTO)'}\n"
+        f"3. Tensão Máxima: {resultados_estabilidade['tensao_max']:.2f} kN/m² "
+        f"{'(OK)' if resultados_estabilidade['pressao_adm_ok'] else '(NÃO OK - EXCEDE CAPACIDADE DO SOLO)'}\n"
+        f"4. Tensão Mínima: {resultados_estabilidade['tensao_min']:.2f} kN/m² "
+        f"{'(OK)' if resultados_estabilidade['tensao_min'] > 0 else '(NÃO OK - RISCO DE LEVANTAMENTO)'}\n"
+        f"5. Base Teórica Necessária: {base_teorica:.2f} m\n"
+        f"6. Base Atual: {b_total:.2f} m\n"
+        f"7. Base Adequada: {'Sim' if base_ok else 'Não'}"
+    )
+
+    axs[1,0].text(0.1, 0.5, relatorio, fontsize=10, va='bottom', ha='left', wrap=True)
+    axs[1,0].set_title('Relatório de Estabilidade')
+    axs[1,0].axis('off')
+
+    plt.tight_layout()
+    plt.show()
+
+
+def plotar_muro_gravidade(h, d, crista, b_mon, gamma_concreto, gamma_solo, phi, c, pressao_adm, nivel_agua, fs_coesao, fs_atrito, ka, calculos_gravidade):
+    """
+    Plota o muro de gravidade com as dimensões especificadas e um relatório de verificação
+    
+    Parâmetros:
+    h: altura do muro (m)
+    d: espessura na base (m) - não usado neste caso
+    crista: largura da crista (m)
+    b_mon: largura total da base (m)
+    gamma_concreto: peso específico do concreto (kN/m³)
+    gamma_solo: peso específico do solo (kN/m³)
+    phi: ângulo de atrito interno do solo (graus)
+    c: coesão do solo (kN/m²)
+    pressao_adm: pressão admissível do solo (kN/m²)
+    nivel_agua: nível d'água (m)
+    fs_coesao: fator de segurança à coesão
+    fs_atrito: fator de segurança ao atrito
+    ka: coeficiente de empuxo ativo
+    calculos_gravidade: dicionário com os resultados dos cálculos
+    
+    Retorna:
+    Figure: objeto figura do matplotlib
+    """
+    # Criar a figura e eixos
+    plt.close('all')  # Fecha todas as figuras existentes
+    fig, axs = plt.subplots(1, 2, figsize=(14, 8))
+    
+    # Extrair os valores do dicionário de resultados
+    x_cg = calculos_gravidade.get('x_cg', b_mon/2)  # Valor padrão caso não exista
+    y_cg = calculos_gravidade.get('y_cg', h/2)      # Valor padrão caso não exista
+    
+    # Preparar dados da geometria
+    ax = axs[0]
+    
+    # Define a geometria do muro (trapézio)
+    pontos = [
+        [0, 0],          # Canto inferior esquerdo
+        [b_mon, 0],  # Base a jusante
+        [b_mon - (b_mon - crista), h],          # Topo a montante
+        [0, h]           # Topo do muro
+    ]
+    
+    # Desenha o muro no primeiro subplot
+    poligono = plt.Polygon(pontos, closed=True, 
+                          edgecolor='lightgray', 
+                          facecolor='none', 
+                          linewidth=2.5,
+                          label='Muro')
+    ax.add_patch(poligono)
+    
+    # Adicionar terra a montante
+    terra_points = [
+        [b_mon - (b_mon - crista), h],                          # Topo do muro
+        [b_mon, 0],              # Base do muro
+        [crista + 1.5 * h, h],                      # Extensão do topo
+        [crista, h]
+    ]
+    ax.add_patch(plt.Polygon(terra_points, closed=True, 
+                           color='saddlebrown', 
+                           alpha=0.5, 
+                           label='Solo'))
+
+    
+    # Centro de gravidade no primeiro subplot
+    # ax.scatter(x_cg, y_cg, color='red', s=100, zorder=3) # Arrumar - Tava pegando o centro de gravidade da base
+    
+    # Anotações dimensionais no primeiro subplot
+    ax.annotate('', xy=(0, -0.1), xytext=(b_mon, -0.1),
+                arrowprops=dict(arrowstyle='<->', color='#34495e', lw=1.5))
+    ax.text((b_mon)/2, -0.2, f'Base: {b_mon}m', 
+            ha='center', va='top', color='#2c3e50')
+    
+    ax.annotate('', xy=(0, h + 0.1), xytext=(crista, h + 0.1),
+                arrowprops=dict(arrowstyle='<->', color='#34495e', lw=1.5))
+    ax.text((crista)/2, h + 0.5, f'Crista: {crista}m', 
+            ha='center', va='top', color='#2c3e50')
+
+    ax.annotate('', xy=(b_mon+0.2, 0), xytext=(b_mon+0.2, h),
+                arrowprops=dict(arrowstyle='<->', color='#34495e', lw=1.5))
+    ax.text(b_mon+0.3, h/2, f'Altura: {h}m', 
+            rotation=90, va='center', color='#2c3e50')
+    
+    # Configuração do gráfico
+    ax.set_xlim(-1, crista + b_mon + h + 3)
+    ax.set_ylim(-0.5, h + 0.5)
+    ax.set_title(f'Muro de Gravidade - {h}m')
+    ax.set_xlabel('Dimensões (metros)')
+    ax.set_ylabel('Altura (metros)')
+    ax.grid(True, linestyle='--', alpha=0.7)
+    ax.set_aspect('equal', adjustable='datalim')
+
+    # Gera quantitativos
+    quantitativos = gerar_quantitativos_gravidade(h, crista, b_mon, gamma_concreto, gamma_solo, phi, c, pressao_adm, nivel_agua, fs_coesao, fs_atrito, ka)
+    
+    # Configurações do gráfico
+    ax.set_xlim(-1, crista + b_mon + 3)
+    ax.set_ylim(-0.5, h+1)
+    ax.set_title(f"Muro de Gravidade - {h}m")
+
+    ax.set_xlabel("Dimensões (m)")
+    ax.set_ylabel("Altura (m)")
+    ax.grid(True, linestyle='--', alpha=0.7)
+    ax.set_aspect('equal', adjustable='datalim')
+
+    # Segundo subplot (relatório)
+    ax = axs[1]
+    ax.set_title('Quantitativos dos Materiais')
+    ax.set_ylabel('Quantidade')
+    ax.set_ylim(-1, len(quantitativos))  # Define o limite do eixo y para garantir que todos os textos sejam visíveis
+    
+    # Relatório de Estabilidade
+    relatorio = (
+        f"Resumo do Quantitativo:\n"
+        f"1. Área de Aço: {quantitativos['area_aco']:.2f} kg/m\n"
+        f"2. Volume de Concreto: {quantitativos['volume_concreto']:.2f} m³/m\n"
+        f"3. Volume de Solo - Corte: {quantitativos['volume_corte']:.2f} m³/m\n"
+        f"4. Volume de Solo - Aterro: {quantitativos['volume_aterro']:.2f} m³/m\n"
+        f"5. Volume de Solo - Carga [+] / Descarga [-]: {quantitativos['volume_descarga']:.2f} m³/m\n"
+
+        f"Relatório de Estabilidade (caso de carregamento normal):\n"
+        f"1. Fator de Segurança ao Deslizamento: {calculos_gravidade['fs_deslizamento']:.2f} {'(OK)' if calculos_gravidade['fs_deslizamento'] >= 1.0 else '(NÃO OK)'}\n"
+        f"2. Fator de Segurança ao Tombamento: {calculos_gravidade['fs_tombamento']:.2f} {'(OK)' if calculos_gravidade['fs_tombamento'] >= 1.5 else '(NÃO OK)'}\n"
+        f"3. Tensão Máxima: {calculos_gravidade['tensao_max']:.2f} kN/m² {'(OK)' if calculos_gravidade['tensao_ok'] else '(NÃO OK)'}\n"
+        f"4. Tensão Mínima: {calculos_gravidade['tensao_min']:.2f} kN/m² {'(OK)' if calculos_gravidade['tensao_min'] > 0 else '(NÃO OK)'}\n"
+    )
+    
+    # Adicionar informações sobre a base teórica e máxima, se disponíveis
+    if 'base_teorica' in calculos_gravidade:
+        base_teorica = calculos_gravidade['base_teorica']
+        base_atual_ok = calculos_gravidade.get('base_atual_ok', False)
+        base_max_ok = calculos_gravidade.get('base_max_ok', True)
+        base_ok = calculos_gravidade.get('base_ok', False)
+        
+        relatorio += (
+            f"\nVerificação da Base:\n"
+            f"5. Base Atual: {b_mon:.2f} m\n"
+            f"6. Base Teórica Aproximada: {base_teorica:.2f} m {'(OK)' if base_atual_ok else '(NÃO OK)'}\n"
+        )
+        
+        if 'base_max_ok' in calculos_gravidade:
+            base_max = calculos_gravidade.get('base_max', 'N/A')
+            if isinstance(base_max, (int, float)):
+                status_max = "(OK)" if base_max_ok else "(NÃO OK)"
+                relatorio += f"7. Base Máxima Permitida: {base_max:.2f} m {status_max}\n"
+            
+        relatorio += f"8. Base Adequada: {'Sim' if base_ok else 'Não'}\n"
+        
+        # Adicionar sugestões se houver problemas
+        if not base_ok:
+            relatorio += "\nSugestões:\n"
+            if not base_atual_ok:
+                relatorio += f"- Aumente a base em pelo menos {base_teorica - b_mon:.2f} m para garantir a estabilidade.\n"
+            if not base_max_ok:
+                relatorio += f"- Reconsidere os parâmetros do projeto, pois a base necessária excede o limite máximo permitido.\n"
+    
+    ax.text(0.1, 0.5, relatorio, fontsize=12, va='center', ha='left')
+    ax.axis('off')  # Remover os eixos para o texto
+    
+    # Adicionar uma mensagem destacada sobre a adequação da base
+    if 'base_ok' in calculos_gravidade and not calculos_gravidade['base_ok']:
+        mensagens = []
+        if 'base_atual_ok' in calculos_gravidade and not calculos_gravidade['base_atual_ok']:
+            mensagens.append(f"Base atual insuficiente (necessário +{calculos_gravidade['base_teorica'] - b_mon:.2f}m)")
+        if 'base_max_ok' in calculos_gravidade and not calculos_gravidade['base_max_ok']:
+            mensagens.append(f"Base teórica excede o limite máximo permitido")
+        
+        if mensagens:
+            plt.figtext(0.5, 0.01, " | ".join(mensagens), 
+                      ha='center', fontsize=12, color='red',
+                      bbox={"facecolor":"yellow", "alpha":0.5, "pad":5})
+    
+    plt.tight_layout()
+    plt.show()
+
+
+def validar_dados_muro_gravidade(h, crista, b_mon, gamma_concreto, gamma_solo, phi, c, pressao_adm, nivel_agua):
+    """
+    Verifica se os valores inseridos para o muro de gravidade são válidos.
+    
+    Retorna (valido, mensagem)
+    valido: True se todos os valores são válidos, False caso contrário
+    mensagem: Mensagem de erro se os valores não forem válidos
+    """
+    mensagens_erro = []
+    
+    # Verificar valores positivos
+    if h <= 0:
+        mensagens_erro.append("A altura deve ser maior que zero")
+    if crista <= 0:
+        mensagens_erro.append("A largura da crista deve ser maior que zero")
+    if b_mon <= 0:
+        mensagens_erro.append("A base deve ser maior que zero")
+    if gamma_concreto <= 0:
+        mensagens_erro.append("O peso específico do concreto deve ser maior que zero")
+    if gamma_solo <= 0:
+        mensagens_erro.append("O peso específico do solo deve ser maior que zero")
+    if pressao_adm <= 0:
+        mensagens_erro.append("A pressão admissível deve ser maior que zero")
+    if phi < 0 or phi > 45:
+        mensagens_erro.append("O ângulo de atrito deve estar entre 0 e 45 graus")
+    if c < 0:
+        mensagens_erro.append("A coesão deve ser maior ou igual a zero")
+    
+    # Verificar coerência entre valores
+    if crista >= b_mon:
+        mensagens_erro.append("A largura da crista deve ser menor que a base")
+    if nivel_agua >= h:
+        mensagens_erro.append("O nível d'água não pode ser maior que a altura do muro")
+    
+    # Verificar limites típicos
+    if gamma_concreto < 18 or gamma_concreto > 28:
+        mensagens_erro.append("O peso específico do concreto está fora do intervalo típico (18-28 kN/m³)")
+    if gamma_solo < 14 or gamma_solo > 22:
+        mensagens_erro.append("O peso específico do solo está fora do intervalo típico (14-22 kN/m³)")
+    if pressao_adm > 500:
+        mensagens_erro.append("A pressão admissível parece muito alta (> 500 kN/m²)")
+    
+    # Verificar proporções comuns para muros de gravidade
+    if b_mon < 0.4 * h:
+        mensagens_erro.append("A base parece muito pequena para a altura do muro (recomenda-se base ≥ 0.4 × altura)")
+    if b_mon > 0.8 * h:
+        mensagens_erro.append("AVISO: Base muito larga em relação à altura (> 0.8 × altura)")
+    
+    if len(mensagens_erro) > 0:
+        return False, "\n".join(mensagens_erro)
+    else:
+        return True, "Valores válidos"
+
+def exibir_muro_gravidade_popup():
+    try:
+        # Obter os valores da interface principal
+        h = float(entry_h.get())
+        crista = float(entry_crista.get())
+        b_mon = float(entry_b_gravidade.get())
+        gamma_concreto = float(entry_gamma_concreto.get())
+        gamma_solo = float(entry_gamma_solo.get())
+        phi = float(entry_phi_estabilidade.get())
+        c = float(entry_coesao.get())
+        pressao_adm = float(entry_pressao_adm.get())
+        nivel_agua = h
+        fs_coesao = float(entry_fs_coesao.get())
+        fs_atrito = float(entry_fs_atrito.get())
+        ka = float(entry_coef_empuxo.get())
+        base_max = float(entry_base_max.get()) if entry_base_max.get() else None
+        
+        # Validar dados
+        valido, mensagem = validar_dados_muro_gravidade(h, crista, b_mon, gamma_concreto, 
+                                                      gamma_solo, phi, c, pressao_adm, nivel_agua)
+        
+        if not valido:
+            # Verificar se são avisos ou erros críticos
+            if "AVISO:" in mensagem:
+                resposta = messagebox.askokcancel("Aviso", 
+                                                 f"Foram detectados possíveis problemas nos dados:\n\n{mensagem}\n\nDeseja continuar mesmo assim?")
+                if not resposta:
+                    return
+            else:
+                messagebox.showerror("Erro nos dados", mensagem)
+                return
+        
+        # Calcular muro de gravidade
+        resultado = calcular_muro_gravidade(h, crista, b_mon, gamma_concreto, gamma_solo, 
+                                           phi, c, pressao_adm, nivel_agua, fs_coesao, 
+                                           fs_atrito, ka, base_max)
+        
+        # Verificar se o resultado foi bem-sucedido
+        if resultado is None:
+            messagebox.showerror("Erro", "Falha ao calcular o muro de gravidade.")
+            return
+        
+        # Plotar o muro
+        plotar_muro_gravidade(
+            h, 0, crista, b_mon, 
+            gamma_concreto, gamma_solo, phi, c, 
+            pressao_adm, nivel_agua, fs_coesao, fs_atrito, ka,
+            resultado  # Passando o resultado completo como calculos_gravidade
+        )
+        
+    except ValueError as e:
+        messagebox.showerror("Erro", f"Por favor, insira valores válidos: {str(e)}")
+    except Exception as e:
+        messagebox.showerror("Erro", f"Ocorreu um erro: {str(e)}")
+
+def gerar_quantitativos_gravidade(h, crista, b_mon, gamma_concreto, gamma_solo, phi, c, pressao_adm, nivel_agua, fs_coesao, fs_atrito, ka,
+                                 preco_concreto=350, preco_aco=8.5, diametro_barra=10, espacamento_barra=0.20, base_max=None):
+    """
+    Gera quantitativos de materiais para o muro de gravidade
+    
+    Parâmetros:
+    h: altura do muro (m)
+    crista: largura da crista (m)
+    b_mon: largura da base a montante (m)
+    gamma_concreto: peso específico do concreto (kN/m³)
+    gamma_solo: peso específico do solo (kN/m³)
+    phi: ângulo de atrito interno do solo (graus)
+    c: coesão do solo (kN/m²)
+    pressao_adm: pressão admissível do solo (kN/m²)
+    nivel_agua: nível d'água (m)
+    fs_coesao: fator de segurança à coesão
+    fs_atrito: fator de segurança ao atrito
+    ka: coeficiente de empuxo ativo
+    preco_concreto: preço do concreto (R$/m³)
+    preco_aco: preço do aço (R$/kg)
+    diametro_barra: diâmetro das barras de aço (mm)
+    espacamento_barra: espaçamento entre barras (m)
+    base_max: base máxima permitida (m) [opcional]
+    
+    Retorna:
+    dict com os quantitativos calculados
+    """
+    # Cálculos do muro de gravidade
+    resultado_gravidade = calcular_muro_gravidade(h, crista, b_mon, gamma_concreto, gamma_solo, phi, c, pressao_adm, nivel_agua, fs_coesao, fs_atrito, ka, base_max)
+    
+    # Cálculo do volume de concreto (trapézio)
+    volume_concreto = resultado_gravidade['volume_concreto']
+    
+    # Cálculo da armadura na crista
+    area_barra = math.pi * (diametro_barra/1000)**2 / 4  # m²
+    comprimento_barra = 2 + crista  # Comprimento de cada barra - Crista + 2m (+- anc para ambos os lados)
+    numero_barras = math.ceil(h / espacamento_barra)
+    volume_aco = area_barra * comprimento_barra * numero_barras  # Volume total de aço em m³
+    peso_aco = volume_aco * 7850  # kg/m (densidade do aço)
+    
+    # Pegar os volumes de solo calculados pelo muro de gravidade
+    volume_corte = resultado_gravidade['volume_corte']
+    volume_aterro = resultado_gravidade['volume_aterro']
+    volume_descarga = resultado_gravidade['volume_descarga']
+    
+    # Cálculo da área de formas
+    # Altura máxima de concretagem = 1.5m, 5 reutilizações
+    numero_camadas = math.ceil(h / 1.5)
+    comprimento_inclinado = math.sqrt((b_mon - crista)**2 + h**2)
+    area_formas = (h + comprimento_inclinado) * numero_camadas / 5
+    
+    # Divisão do volume por tipo de concreto
+    volume_concreto_25 = volume_concreto * 0.9  # 90% em concreto estrutural
+    volume_concreto_6 = volume_concreto * 0.1   # 10% em concreto de regularização
+    
+    return {
+        'volume_concreto': volume_concreto,
+        'volume_concreto_25': volume_concreto_25,
+        'volume_concreto_6': volume_concreto_6,
+        'area_aco': peso_aco,
+        'fs_deslizamento': resultado_gravidade['fs_deslizamento'],
+        'fs_tombamento': resultado_gravidade['fs_tombamento'],
+        'volume_corte': volume_corte,
+        'volume_aterro': volume_aterro,
+        'volume_descarga': volume_descarga,
+        'formas': area_formas,
+        'tensao_max': resultado_gravidade['tensao_max'],
+        'tensao_min': resultado_gravidade['tensao_min'],
+        'pressao_adm_ok': resultado_gravidade['tensao_ok'],
+        'base_teorica': resultado_gravidade['base_teorica'],
+        'base_atual_ok': resultado_gravidade['base_atual_ok'],
+        'base_max_ok': resultado_gravidade['base_max_ok'],
+        'base_ok': resultado_gravidade['base_ok']
+    }
+
+def mostrar_avisos_iniciais():
+    # Criar uma janela popup
+    janela_avisos = tk.Toplevel()
+    janela_avisos.title("Avisos Importantes")
+    janela_avisos.geometry("500x400")
+    janela_avisos.resizable(False, False)
+    janela_avisos.transient(root)  # Define como modal
+    janela_avisos.grab_set()       # Impede interação com a janela principal
+    
+    # Cabeçalho
+    tk.Label(janela_avisos, text="Avisos Importantes", font=("Arial", 14, "bold")).pack(pady=10)
+    
+    # Área de texto com barra de rolagem
+    frame_texto = tk.Frame(janela_avisos)
+    frame_texto.pack(fill="both", expand=True, padx=20, pady=10)
+    
+    scrollbar = tk.Scrollbar(frame_texto)
+    scrollbar.pack(side="right", fill="y")
+    
+    texto_avisos = tk.Text(frame_texto, wrap="word", yscrollcommand=scrollbar.set)
+    texto_avisos.pack(side="left", fill="both", expand=True)
+    scrollbar.config(command=texto_avisos.yview)
+    
+    # Conteúdo dos avisos
+    avisos = """
+    Bem-vindo ao Programa de Dimensionamento de Muros!
+    
+    AVISOS IMPORTANTES:
+    
+    1. Este programa é uma ferramenta de auxílio ao pré-dimensionamento e não substitui o julgamento profissional de um engenheiro qualificado.
+    
+    2. Os cálculos são baseados em métodos simplificados e podem não considerar todas as variáveis presentes em um projeto real.
+    
+    3. A responsabilidade pela verificação dos resultados e sua aplicação em projetos reais é inteiramente do usuário.
+    
+    4. Recomenda-se a validação dos resultados através de métodos alternativos e/ou consultoria especializada.
+    
+    5. O programa não considera análises sísmicas, condições especiais do solo ou outros fatores específicos que podem ser críticos em determinadas situações.
+    
+    Ao continuar, você confirma que leu e compreendeu estes avisos.
+    """
+    
+    texto_avisos.insert("1.0", avisos)
+    texto_avisos.config(state="disabled")  # Torna o texto não editável
+    
+    # Botão de confirmação
+    def fechar_aviso():
+        janela_avisos.destroy()
+    
+    tk.Button(janela_avisos, text="Concordo e Desejo Continuar", command=fechar_aviso, 
+              font=("Arial", 10, "bold")).pack(pady=15)
+    
+    # Esperar até que a janela seja fechada
+    root.wait_window(janela_avisos)
+
+
+def calcular_muro_contrafortes(h, b_jus, espessura, espacamento_contrafortes, h_contraforte, gamma_concreto, gamma_solo, phi, c, pressao_adm, ka=0.3):
+    """
+    Calcula quantitativos e verificações para muros com contrafortes
+    
+    Parâmetros:
+    h: altura total do muro (m)
+    b_jus: largura da base (m)
+    espessura: espessura da parede do muro (m)
+    espacamento_contrafortes: distância entre eixos dos contrafortes (m)
+    h_contraforte: altura dos contrafortes (m)
+    gamma_concreto: peso específico do concreto (kN/m³)
+    gamma_solo: peso específico do solo (kN/m³)
+    phi: ângulo de atrito interno do solo (graus)
+    c: coesão do solo (kN/m²)
+    pressao_adm: pressão admissível do solo (kN/m²)
+    ka: coeficiente de empuxo ativo
+    """
+    # 1. Cálculos geométricos
+    # Volume principal da parede do muro (paredes frontais)
+    # Cálculo para 100m de extensão linear para padronização
+    volume_muro = h * b_jus * espessura * 100  # [altura × largura base × espessura × 100m] (m³)
+    
+    # Número de contrafortes necessários para 100m lineares (número inteiro)
+    # Adiciona 1 para considerar o contraforte inicial
+    num_contrafortes = int(100 / espacamento_contrafortes) + 1
+    
+    # Volume de cada contraforte (forma triangular)
+    # Fórmula: 0.5 × altura do contraforte × espessura × altura do muro
+    volume_contraforte = 0.5 * h_contraforte * espessura * h  # (m³)
+    
+    # Volume total de concreto = volume das paredes + volume de todos os contrafortes
+    volume_total_concreto = volume_muro + volume_contraforte * num_contrafortes  # (m³)
+    
+    # 2. Peso próprio
+    # Peso total do muro de concreto = volume × peso específico
+    peso_muro = volume_total_concreto * gamma_concreto  # (kN)
+    
+    # Peso do solo sobre a base (entre a parede e o terreno)
+    # Área = h × (b_jus - espessura) × 100m
+    peso_solo = gamma_solo * h * (b_jus - espessura) * 100  # (kN)
+    
+    # 3. Empuxo ativo
+    # Fórmula clássica do empuxo ativo: 0.5 × γsolo × h² × ka
+    # Este é o empuxo total para os 100m lineares
+    ea = 0.5 * gamma_solo * h**2 * ka * 100  # (kN)
+    
+    # 4. Verificação ao Deslizamento
+    # Área da base completa para cálculo do atrito e coesão
+    area_base = b_jus * 100  # (m²)
+    
+    # Fator de segurança ao deslizamento:
+    # FS = (Forças resistentes) / (Forças solicitantes)
+    # Forças resistentes = Coesão × Área + Peso total × tan(φ)
+    fs_deslizamento = (c * area_base + (peso_muro + peso_solo) * math.tan(math.radians(phi))) / ea
+    fs_deslizamento_ok = fs_deslizamento >= 1.5  # Critério: FS ≥ 1.5
+    
+    # 5. Verificação ao Tombamento
+    # Braço de alavanca para as forças estabilizantes (centro da base)
+    braco_estabilizante = b_jus/2  # (m)
+    
+    # Braço de alavanca para o empuxo ativo (1/3 da altura)
+    braco_tombamento = h/3  # (m)
+    
+    # Momento estabilizante = Peso total × braço estabilizante
+    momento_estabilizante = (peso_muro + peso_solo) * braco_estabilizante  # (kN.m)
+    
+    # Momento de tombamento = Empuxo ativo × braço de tombamento
+    momento_tombamento = ea * braco_tombamento  # (kN.m)
+    
+    # Fator de segurança ao tombamento:
+    # FS = Momento estabilizante / Momento de tombamento
+    fs_tombamento = momento_estabilizante / momento_tombamento
+    fs_tombamento_ok = fs_tombamento >= 1.5  # Critério: FS ≥ 1.5
+    
+    # 6. Verificação de Tensões
+    # Cálculo da excentricidade da resultante:
+    # e = (Momento estabilizante - Momento tombamento) / Peso total
+    excentricidade = (momento_estabilizante - momento_tombamento) / (peso_muro + peso_solo)
+    
+    # Tensão máxima na base, usando a fórmula da flexão composta:
+    # σmax = N/A × (1 + 6e/B)
+    # Onde: N = força normal, A = área da base, e = excentricidade, B = largura da base
+    tensao_max = (peso_muro + peso_solo)/(area_base) * (1 + 6*excentricidade/b_jus)  # (kN/m²)
+    tensao_ok = tensao_max <= pressao_adm  # Verifica se a tensão máxima é aceitável
+    
+    # 7. Cálculo de materiais
+    # Área de formas: Faces laterais da cortina + Faces dos contrafortes
+    area_forms = (2 * h * 100) + (2 * h * h_contraforte * num_contrafortes)  # (m²)
+    
+    # Estimativa de peso de aço por volume de concreto (80kg/m³ é um valor típico para este tipo de estrutura)
+    peso_aco = 80 * volume_total_concreto  # (kg)
+    
+    # Espaçamento real entre contrafortes (considerando os 100m divididos pelo número de vãos)
+    espacamento_real = 100 / (num_contrafortes - 1) if num_contrafortes > 1 else espacamento_contrafortes
+    
+    return {
+        'volume_concreto': volume_total_concreto,
+        'peso_aco': peso_aco,
+        'num_contrafortes': num_contrafortes,
+        'area_forms': area_forms,
+        'fs_deslizamento': fs_deslizamento,
+        'fs_deslizamento_ok': fs_deslizamento_ok,
+        'fs_tombamento': fs_tombamento,
+        'fs_tombamento_ok': fs_tombamento_ok,
+        'tensao_max': tensao_max,
+        'tensao_ok': tensao_ok,
+        'espacamento_real': espacamento_real,
+        'excentricidade': excentricidade,
+        'peso_total': peso_muro + peso_solo,
+        'momento_estabilizante': momento_estabilizante,
+        'momento_tombamento': momento_tombamento,
+        'empuxo_ativo': ea
+    }
+
+
+def calcular_altura_util(h):
+    """
+    Calcula a altura útil como h/12 arredondado de 5 em 5 cm
+    """
+    d_exato = h / 12
+    # Arredonda para o múltiplo de 5 cm mais próximo (0.05m)
+    d = round(d_exato * 20) / 20  # Dividir por 20 porque 5cm = 0.05m = 1/20m
+    return max(d, 0.05)  # Garantir valor mínimo de 5 cm
+
+# Quando clica no botao calcular chama essa função
+def calcular():
+    try:
+        h = float(entry_h.get())
+        b_jus = float(entry_b_jus.get())
+        b_mon = float(entry_b_mon.get())
+        d = calcular_altura_util(h)
+        gamma_solo = float(entry_gamma_solo.get())
+        phi = float(entry_phi_estabilidade.get())
+        fck = float(entry_fck.get())
+        fyk = float(entry_fyk.get())
+
+        # Capturar os valores de custo inseridos pelo usuário
+        custo_concreto_25 = float(entry_custo_concreto_25.get())  # R$/m³
+        custo_concreto_6 = float(entry_custo_concreto_6.get())  # R$/m³
+        custo_aco_ca50 = float(entry_custo_aco_ca50.get())  # R$/kg
+        custo_aterro = float(entry_custo_aterro.get())  # R$/m³
+        custo_corte = float(entry_custo_corte.get())  # R$/m³
+        custo_carga = float(entry_custo_carga.get())  # R$/m³
+        custo_descarga = float(entry_custo_descarga.get())  # R$/m³
+        custo_forma = float(entry_custo_forma.get())  # R$/m²
+
+        # Obter os valores dos parâmetros de estabilidade
+        gamma_concreto = float(entry_gamma_concreto.get())
+        nivel_agua = h
+        coef_empuxo = float(entry_coef_empuxo.get())
+        pressao_adm = float(entry_pressao_adm.get())
+        
+        # Obter o valor da base máxima permitida
+        base_max = float(entry_base_max.get())
+        
+        c = float(entry_coesao.get())
+        phi_estabilidade = float(entry_phi_estabilidade.get())
+        ka = float(entry_coef_empuxo.get())
+
+        # Chamar a função de dimensionamento aqui
+        dia_barra, espacamento = dimensionar_muro_arrimo_flexao(h, b_mon, d, gamma_solo, phi, fck, fyk, coef_empuxo)
+        
+        
+        as_final = math.pi * (dia_barra/10)**2 / 4 * 100 / espacamento  # área de uma barra em cm²
+
+        # volume_corte = plotar_muro_arrimo(b_jus, b_mon, h, d, as_final, gamma_solo) / gamma_solo  # Chama a função para plotar o muro
+        peso_corte, _, volume_aterro, volume_corte = calcular_peso_terra_montante(h, b_mon, gamma_solo)  # Captura apenas o peso
+        
+        volume_corte = peso_corte / gamma_solo
+
+        # Exemplo de resultados gerados
+        volume_concreto_25 = (h + b_jus + b_mon) * d - d * d  # Exemplo de valor
+        volume_concreto_6 = 0  # Muro de flexão não usa esse concreto
+
+        peso_aco_ca50 = as_final * 7.85 * (h + b_jus + b_mon * 1.4) * 0.7 # Verificar armadura horizontal (esse 1,4 multiplicando) 0.7 é o fator de redução (a seção inteira não é armada pro momento máximo)
+
+        # Calcula o volume de carga e descarga
+        volume_carga = max(volume_corte - volume_aterro, 0)
+        volume_descarga = max(volume_aterro - volume_corte, 0)
+
+        # Calcula a área de formas
+        altura_max_camada = 1.5 # Altura máxima da camada de concretagem
+        num_camadas = math.ceil(h / altura_max_camada)
+        reutilizacoes_forma = 5 # Quantidade de reutilizações da forma
+
+        if num_camadas > reutilizacoes_forma:
+            area_forma = 2 * num_camadas
+        else:
+            area_forma = 2 * h / reutilizacoes_forma
+
+        # Atualizar os labels com os resultados
+        label_concreto_25.config(text=f"{volume_concreto_25:.2f}")
+        label_total_concreto_25.config(text=f"{volume_concreto_25 * custo_concreto_25:.2f}")
+
+        label_concreto_6.config(text=f"{volume_concreto_6:.2f}")
+        label_total_concreto_6.config(text=f"{volume_concreto_6 * custo_concreto_6:.2f}")
+
+        label_aco_ca50.config(text=f"{peso_aco_ca50:.2f}")
+        label_total_aco_ca50.config(text=f"{peso_aco_ca50 * custo_aco_ca50:.2f}")
+
+        label_aterro.config(text=f"{volume_aterro:.2f}")
+        label_total_aterro.config(text=f"{volume_aterro * custo_aterro:.2f}")
+        
+        # Novos cálculos para os custos adicionais
+        label_corte.config(text=f"{volume_corte:.2f}")
+        label_total_corte.config(text=f"{volume_corte * custo_corte:.2f}")
+
+        label_carga.config(text=f"{volume_carga:.2f}")
+        label_total_carga.config(text=f"{volume_carga * custo_carga:.2f}")
+
+        label_descarga.config(text=f"{volume_descarga:.2f}")
+        label_total_descarga.config(text=f"{volume_descarga * custo_descarga:.2f}")
+
+        label_forma.config(text=f"{area_forma:.2f}")
+        label_total_forma.config(text=f"{area_forma * custo_forma:.2f}")
+        
+        # Chamar a função de verificação de estabilidade
+        fs_coesao = float(entry_fs_coesao.get())
+        fs_atrito = float(entry_fs_atrito.get())
+
+        resultados_estabilidade = verificar_estabilidade_flexao(
+            h, d, b_jus, b_mon, gamma_solo, phi_estabilidade,
+            gamma_concreto, nivel_agua, coef_empuxo, pressao_adm,
+            c, fs_coesao, fs_atrito, base_max
+        )
+        
+        # Exibir os resultados da verificação de estabilidade
+        print("Resultados da Verificação de Estabilidade:")
+        print(f"Fator de Segurança ao Tombamento: {resultados_estabilidade['fs_tombamento']:.2f}")
+        print(f"Tensão Máxima na Base: {resultados_estabilidade['tensao_max']:.2f} kN/m²")
+        print(f"Tensão Mínima na Base: {resultados_estabilidade['tensao_min']:.2f} kN/m²")
+        print(f"Pressão Admissível OK: {resultados_estabilidade['pressao_adm_ok']}")
+        print(f"Fator de Segurança ao Tombamento OK: {resultados_estabilidade['fs_tombamento_ok']}")
+        print(f"Fator de Segurança ao Deslizamento OK: {resultados_estabilidade['fs_deslizamento_ok']}")
+        print(f"Base Teórica Necessária: {resultados_estabilidade['base_teorica']:.2f} m")
+        print(f"Base Atual: {b_jus + b_mon:.2f} m")
+        print(f"Base Máxima Permitida: {base_max:.2f} m")
+        print(f"Base Atual Suficiente: {resultados_estabilidade['base_atual_ok']}")
+        print(f"Base Dentro do Limite Máximo: {resultados_estabilidade['base_max_ok']}")
+        
+        if resultados_estabilidade['base_ok']:
+            print("VERIFICAÇÃO DE BASE: OK - A base atual é adequada para a estabilidade do muro e está dentro do limite máximo permitido.")
+        else:
+            print("VERIFICAÇÃO DE BASE: NÃO OK")
+            if not resultados_estabilidade['base_atual_ok']:
+                print("  - A base atual é menor que a base teórica necessária para a estabilidade.")
+                print(f"  - Sugestão: Aumentar a base em pelo menos {resultados_estabilidade['base_teorica'] - (b_jus + b_mon):.2f} m.")
+            if not resultados_estabilidade['base_max_ok']:
+                print("  - A base teórica necessária é maior que a base máxima permitida.")
+                print("  - Sugestão: Reconsiderar os parâmetros de projeto ou aumentar a base máxima permitida.")
+        
+        # Atualizar exibição dos resultados
+        entry_fs_coesao.config(text=f"{fs_coesao:.2f}")
+        entry_fs_atrito.config(text=f"{fs_atrito:.2f}")
+
+        # Pega os valores para calculo de quantitativos de gravidade
+        crista = float(entry_crista.get())
+        b_gravidade = float(entry_b_gravidade.get())
+
+        quantitativos_gravidade = gerar_quantitativos_gravidade(h, crista, b_gravidade, gamma_concreto, gamma_solo, phi, c, pressao_adm, nivel_agua, fs_coesao, fs_atrito, ka)
+        resultado_gravidade = calcular_muro_gravidade(h, crista, b_gravidade, gamma_concreto, gamma_solo, phi, c, pressao_adm, nivel_agua, fs_coesao, fs_atrito, ka, base_max)
+        
+        # Exibir os resultados da verificação de estabilidade para o muro de gravidade (opcional)
+        print("\n==== Resultados do Muro de Gravidade ====")
+        print(f"Fator de Segurança ao Deslizamento: {resultado_gravidade['fs_deslizamento']:.2f}")
+        print(f"Fator de Segurança ao Tombamento: {resultado_gravidade['fs_tombamento']:.2f}")
+        print(f"Tensão Máxima na Base: {resultado_gravidade['tensao_max']:.2f} kN/m²")
+        print(f"Tensão Mínima na Base: {resultado_gravidade['tensao_min']:.2f} kN/m²")
+        
+        # Exibir informações sobre a base teórica para o muro de gravidade
+        print(f"Base Teórica Necessária: {resultado_gravidade['base_teorica']:.2f} m")
+        print(f"Base Atual: {b_gravidade:.2f} m")
+        print(f"Base Máxima Permitida: {base_max:.2f} m")
+        print(f"Base Atual Suficiente: {resultado_gravidade['base_atual_ok']}")
+        print(f"Base Dentro do Limite Máximo: {resultado_gravidade['base_max_ok']}")
+        
+        if resultado_gravidade['base_ok']:
+            print("VERIFICAÇÃO DE BASE: OK - A base do muro de gravidade é adequada e está dentro do limite máximo permitido.")
+        else:
+            print("VERIFICAÇÃO DE BASE: NÃO OK")
+            if not resultado_gravidade['base_atual_ok']:
+                print(f"  - A base atual é menor que a base teórica necessária para a estabilidade.")
+                print(f"  - Sugestão: Aumentar a base em pelo menos {resultado_gravidade['base_teorica'] - b_gravidade:.2f} m.")
+            if not resultado_gravidade['base_max_ok']:
+                print(f"  - A base teórica necessária é maior que a base máxima permitida.")
+                print(f"  - Sugestão: Reconsiderar os parâmetros de projeto ou aumentar a base máxima permitida.")
+
+        # Atualizar os labels com os resultados
+        label_concreto_25_grav.config(text=f"{quantitativos_gravidade['volume_concreto_25']:.2f}")
+        label_total_concreto_25_grav.config(text=f"{quantitativos_gravidade['volume_concreto_25'] * custo_concreto_25:.2f}")
+
+        label_concreto_6_grav.config(text=f"{quantitativos_gravidade['volume_concreto_6']:.2f}")
+        label_total_concreto_6_grav.config(text=f"{quantitativos_gravidade['volume_concreto_6'] * custo_concreto_6:.2f}")
+
+        label_aco_ca50_grav.config(text=f"{quantitativos_gravidade['area_aco']:.2f}")
+        label_total_aco_ca50_grav.config(text=f"{quantitativos_gravidade['area_aco'] * custo_aco_ca50:.2f}")
+
+        label_aterro_grav.config(text=f"{quantitativos_gravidade['volume_aterro']:.2f}")
+        label_total_aterro_grav.config(text=f"{quantitativos_gravidade['volume_aterro'] * custo_aterro:.2f}")
+        
+        # Novos cálculos para os custos adicionais
+        label_corte_grav.config(text=f"{quantitativos_gravidade['volume_corte']:.2f}")
+        label_total_corte_grav.config(text=f"{quantitativos_gravidade['volume_corte'] * custo_corte:.2f}")
+
+        label_carga_grav.config(text=f"{quantitativos_gravidade['volume_descarga']:.2f}")
+        label_total_carga_grav.config(text=f"{quantitativos_gravidade['volume_descarga'] * custo_carga:.2f}")
+
+        label_descarga_grav.config(text=f"{quantitativos_gravidade['volume_descarga']:.2f}")
+        label_total_descarga_grav.config(text=f"{quantitativos_gravidade['volume_descarga'] * custo_descarga:.2f}")
+
+        label_forma_grav.config(text=f"{quantitativos_gravidade['formas']:.2f}")
+        label_total_forma_grav.config(text=f"{quantitativos_gravidade['formas'] * custo_forma:.2f}")
+
+        # Atualiza a soma de todos os metodos
+        label_total_total.config(text=f"{volume_concreto_25 * custo_concreto_25 + volume_concreto_6 * custo_concreto_6 + peso_aco_ca50 * custo_aco_ca50 + volume_aterro * custo_aterro + volume_corte * custo_corte + volume_carga * custo_carga + volume_descarga * custo_descarga + area_forma * custo_forma:.2f}")
+
+        label_total_total_grav.config(text=f"{quantitativos_gravidade['volume_concreto_25'] * custo_concreto_25 + quantitativos_gravidade['volume_concreto_6'] * custo_concreto_6 + quantitativos_gravidade['area_aco'] * custo_aco_ca50 + quantitativos_gravidade['volume_aterro'] * custo_aterro + quantitativos_gravidade['volume_corte'] * custo_corte + quantitativos_gravidade['volume_descarga'] * custo_carga + quantitativos_gravidade['formas'] * custo_forma:.2f}")
+
+        # Monta as strings para exibir a estabilidade do muro
+        if resultados_estabilidade['fs_tombamento_ok']:
+            estavel_flexao = "OK"
+        else:
+            estavel_flexao = " Verif. FST"
+
+        if resultados_estabilidade['pressao_adm_ok']:
+            if estavel_flexao == "OK":
+                estavel_flexao = "OK"
+        else:
+            if estavel_flexao == "OK":
+                estavel_flexao = " Verif. Tensão"
+            else:
+                estavel_flexao = estavel_flexao + ", Verif. Tensão"
+
+        if resultados_estabilidade['fs_deslizamento_ok']:
+            if estavel_flexao == "OK":
+                estavel_flexao = "OK"
+        else:
+            if estavel_flexao == "OK":
+                estavel_flexao = " Verif. FSD"
+            else:
+                estavel_flexao = estavel_flexao + ", FSD"
+
+        if resultado_gravidade['fs_deslizamento_ok']:
+            estavel_gravidade = "OK"
+        else:
+            estavel_gravidade = " Verif. FSD"
+
+        if resultado_gravidade['tensao_ok']:
+            if estavel_gravidade == "OK":
+                estavel_gravidade = "OK"
+        else:
+            if estavel_gravidade == "OK":
+                estavel_gravidade = " Verif. Tensão"
+            else:
+                estavel_gravidade = estavel_gravidade + ", Tensão"
+
+        if resultado_gravidade['fs_tombamento_ok']:
+            if estavel_gravidade == "OK":
+                estavel_gravidade = "OK"
+        else:
+            if estavel_gravidade == "OK":
+                estavel_gravidade = " Verif. FST"
+            else:
+                estavel_gravidade = estavel_gravidade + " Verif. FST"
+
+        estavel_flexao = f"Flexão: {estavel_flexao}"
+
+        estavel_gravidade = f"Gravidade: {estavel_gravidade}"
+
+        # Atualiza a estabilidade do muro
+        label_estavel_flexao.config(text=estavel_flexao)
+
+        label_estavel_gravidade.config(text=estavel_gravidade)
+
+        """label_total_total_contraforte.config(text=f"{volume_concreto_25_contraforte * custo_concreto_25 
+                                        + volume_concreto_6_contraforte * custo_concreto_6 + peso_aco_ca50_contraforte * custo_aco_ca50 
+                                        + volume_aterro_contraforte * custo_aterro + volume_corte_contraforte * custo_corte 
+                                        + volume_carga_contraforte * custo_carga + volume_descarga_contraforte * custo_descarga 
+                                        + area_forma_contraforte * custo_forma:.2f}")"""
+        
+        # Cálculos para o muro de contrafortes
+        # Valores padrão para o muro de contrafortes
+        espessura_contra = 0.3  # m
+        espacamento_contrafortes = 3.0  # m
+        h_contraforte = 1.0  # m
+
+        # Calcular os quantitativos do muro de contrafortes
+        quantitativos_contrafortes = gerar_quantitativos_contrafortes(
+            h, b_gravidade, espessura_contra, espacamento_contrafortes, h_contraforte,
+            gamma_concreto, gamma_solo, phi, c, pressao_adm, ka
+        )
+
+        # Atualizar os labels com os resultados do muro de contrafortes
+        label_concreto_25_contraforte.config(text=f"{quantitativos_contrafortes['volume_concreto_25']:.2f}")
+        label_total_concreto_25_contraforte.config(text=f"{quantitativos_contrafortes['volume_concreto_25'] * custo_concreto_25:.2f}")
+
+        label_concreto_6_contraforte.config(text=f"{quantitativos_contrafortes['volume_concreto_6']:.2f}")
+        label_total_concreto_6_contraforte.config(text=f"{quantitativos_contrafortes['volume_concreto_6'] * custo_concreto_6:.2f}")
+
+        label_aco_ca50_contraforte.config(text=f"{quantitativos_contrafortes['area_aco']:.2f}")
+        label_total_aco_ca50_contraforte.config(text=f"{quantitativos_contrafortes['area_aco'] * custo_aco_ca50:.2f}")
+
+        label_aterro_contraforte.config(text=f"{quantitativos_contrafortes['volume_aterro']:.2f}")
+        label_total_aterro_contraforte.config(text=f"{quantitativos_contrafortes['volume_aterro'] * custo_aterro:.2f}")
+
+        label_corte_contraforte.config(text=f"{quantitativos_contrafortes['volume_corte']:.2f}")
+        label_total_corte_contraforte.config(text=f"{quantitativos_contrafortes['volume_corte'] * custo_corte:.2f}")
+
+        label_carga_contraforte.config(text=f"{quantitativos_contrafortes['volume_descarga']:.2f}")
+        label_total_carga_contraforte.config(text=f"{quantitativos_contrafortes['volume_descarga'] * custo_carga:.2f}")
+
+        label_descarga_contraforte.config(text=f"{quantitativos_contrafortes['volume_descarga']:.2f}")
+        label_total_descarga_contraforte.config(text=f"{quantitativos_contrafortes['volume_descarga'] * custo_descarga:.2f}")
+
+        label_forma_contraforte.config(text=f"{quantitativos_contrafortes['formas']:.2f}")
+        label_total_forma_contraforte.config(text=f"{quantitativos_contrafortes['formas'] * custo_forma:.2f}")
+
+        # Calcular o total para o muro de contrafortes
+        total_contraforte = (
+            quantitativos_contrafortes['volume_concreto_25'] * custo_concreto_25 + 
+            quantitativos_contrafortes['volume_concreto_6'] * custo_concreto_6 + 
+            quantitativos_contrafortes['area_aco'] * custo_aco_ca50 + 
+            quantitativos_contrafortes['volume_aterro'] * custo_aterro + 
+            quantitativos_contrafortes['volume_corte'] * custo_corte + 
+            quantitativos_contrafortes['volume_descarga'] * custo_carga + 
+            quantitativos_contrafortes['formas'] * custo_forma
+        )
+        label_total_total_contraforte.config(text=f"{total_contraforte:.2f}")
+
+        # Verificação de estabilidade para o muro de contrafortes
+        if quantitativos_contrafortes['fs_deslizamento_ok']:
+            estavel_contraforte = "OK"
+        else:
+            estavel_contraforte = " Verif. FSD"
+
+        if quantitativos_contrafortes['tensao_ok']:
+            if estavel_contraforte == "OK":
+                estavel_contraforte = "OK"
+        else:
+            if estavel_contraforte == "OK":
+                estavel_contraforte = " Verif. Tensão"
+            else:
+                estavel_contraforte = estavel_contraforte + ", Tensão"
+
+        if quantitativos_contrafortes['fs_tombamento_ok']:
+            if estavel_contraforte == "OK":
+                estavel_contraforte = "OK"
+        else:
+            if estavel_contraforte == "OK":
+                estavel_contraforte = " Verif. FST"
+            else:
+                estavel_contraforte = estavel_contraforte + ", FST"
+
+        estavel_contraforte = f"Contrafortes: {estavel_contraforte}"
+
+        # Atualiza a estabilidade do muro de contrafortes
+        label_estavel_contraforte.config(text=estavel_contraforte)
+        
+    except ValueError:
+        messagebox.showerror("Erro", "Por favor, insira valores válidos.")
+
+def botao_plotar_muro_arrimo():
+    try:
+        h = float(entry_h.get())
+        b_jus = float(entry_b_jus.get())
+        b_mon = float(entry_b_mon.get())
+        d = calcular_altura_util(h)
+        gamma_solo = float(entry_gamma_solo.get())
+        phi = float(entry_phi_estabilidade.get())
+        fck = float(entry_fck.get())
+        fyk = float(entry_fyk.get())
+        gamma_concreto = float(entry_gamma_concreto.get())
+        nivel_agua = h
+        coef_empuxo = float(entry_coef_empuxo.get())
+        pressao_adm = float(entry_pressao_adm.get())
+        c = float(entry_coesao.get())
+        fs_coesao = float(entry_fs_coesao.get())
+        fs_atrito = float(entry_fs_atrito.get())
+        base_max = float(entry_base_max.get())
+        
+        # Chamar a função de dimensionamento
+        dia_barra, espacamento = dimensionar_muro_arrimo_flexao(h, b_mon, d, gamma_solo, phi, fck, fyk, coef_empuxo)
+        as_final = math.pi * (dia_barra/10)**2 / 4 * 100 / espacamento  # área de uma barra em cm²
+
+        # Verificação de estabilidade
+        resultados_estabilidade = verificar_estabilidade_flexao(
+            h, d, b_jus, b_mon, gamma_solo, phi,
+            gamma_concreto, nivel_agua, coef_empuxo, pressao_adm,
+            c, fs_coesao, fs_atrito, base_max
+        )
+        
+        # Plotar o muro
+        plotar_muro_arrimo(b_jus, b_mon, h, d, as_final, gamma_solo, 
+                         resultados_estabilidade['tensao_max'], pressao_adm, resultados_estabilidade)
+        
+    except ValueError:
+        messagebox.showerror("Erro", "Por favor, insira valores válidos.")
+
+def verificar_estabilidade_flexao(h, d, b_jus, b_mon, gamma_solo, phi_estabilidade, gamma_concreto, nivel_agua, coef_empuxo, pressao_adm, c, fs_coesao, fs_atrito, base_max=None):
+    """
+    Verifica a estabilidade do muro de arrimo considerando momentos em relação ao centro da base
+    e a altura do muro, incluindo a coesão do solo.
+    
+    Parâmetros:
+    h: altura do muro (m)
+    b_jus: largura da base a jusante (m)
+    b_mon: largura da base a montante (m)
+    gamma_solo: peso específico do solo (kN/m³)
+    phi: ângulo de atrito interno do solo (graus)
+    gamma_concreto: peso específico do concreto (kN/m³)
+    nivel_agua: nível d'água (m)
+    coef_empuxo: coeficiente de empuxo ativo (K)
+    pressao_adm: pressão admissível do solo (kN/m²)
+    c: coesão do solo (kN/m²) [opcional, padrão = 0]
+    fs_coesao: fator de segurança à coesão
+    fs_atrito: fator de segurança ao atrito
+    base_max: base máxima permitida (m) [opcional]
+    
+    Retorna:
+    dict com fatores de segurança distintos para coesão e atrito
+    """
+    # Largura total da base
+    b_total = b_jus + b_mon
+    
+    # Cálculo do empuxo ativo
+    ka = coef_empuxo  # Coeficiente de empuxo ativo
+    ea = 0.5 * gamma_solo * h**2 * ka  # Empuxo ativo total
+    
+    # Área da seção transversal do muro
+    area_muro = ((b_jus + b_mon) * d) + (h * d) - (d * d)
+    
+    # Peso do muro por metro linear
+    peso_muro = area_muro * gamma_concreto
+    
+    # Centro de gravidade do muro (coordenada x em relação à extremidade jusante)
+    # Componentes:
+    # 1. Base (retângulo)
+    area_base = b_total * d
+    x_base = b_total / 2
+ 
+    # 3. Talão montante (retângulo)
+    area_talao = (h - d) * d
+    x_talao = b_jus + (d / 2)
+    
+    # CG total
+    x_muro = (area_base*x_base + area_talao*x_talao) / area_muro
+    
+    # 2. Cálculo do peso do solo
+    # Volume de solo sobre o talão
+    volume_solo = (b_mon - d) * (h - d)
+    peso_solo = volume_solo * gamma_solo
+    x_solo = b_jus + d + ((b_mon - d) / 2)
+    
+    # Força normal total na base
+    forca_normal = peso_muro + peso_solo
+    
+    # Isso permite que o usuário defina fatores de segurança diferentes 
+    # para cada componente de resistência, 
+    # seguindo as recomendações da NBR 11682/2022 para contenções.
+
+    # Forças resistentes ao deslizamento
+    resistencia_coesao = c * b_total
+    resistencia_atrito = forca_normal * math.tan(math.radians(phi_estabilidade))
+    
+    # Fatores de segurança parciais
+    fs_deslizamento_total = (resistencia_coesao / (ea * fs_coesao)) + (resistencia_atrito / (ea * fs_atrito))
+    
+    # Momentos em relação ao centro da base (momento estabilizante)
+    momento_muro_cg = peso_muro * (x_muro - b_total/2)
+    momento_solo_cg = peso_solo * (x_solo - b_total/2)
+
+    # Momentos em relação ao ponto de tombamento (momento estabilizante)
+    momento_muro = peso_muro * x_muro
+    momento_solo = peso_solo * x_solo
+    # Momento estabilizante total
+    me_cg = momento_muro_cg + momento_solo_cg
+    
+    # Momento estabilizante total
+    me = momento_muro + momento_solo
+
+    # Momento do empuxo em relação ao centro (momento de tombamento)
+    braco_ea = h / 3  # Ponto de aplicação do empuxo ativo em y = h/3 a partir da base
+    mt = ea * braco_ea
+    
+    # Fator de segurança ao tombamento
+    fs_tombamento = me / mt 
+    
+    # Excentricidade em relação ao centro da base
+    excentricidade = (me - mt) / forca_normal
+    
+    # Base efetiva considerando a excentricidade
+    base_efetiva = b_total - 2 * abs(excentricidade)
+    
+    # Tensões na base
+    tensao_max = forca_normal / b_total + abs(6 * (me_cg - mt) / b_total**2)
+    tensao_min = forca_normal / b_total - abs(6 * (me_cg - mt) / b_total**2)
+    
+    # Verificação da excentricidade
+    excentricidade_ok = abs(excentricidade) <= b_total / 6
+    
+    # Verificação da pressão admissível
+    pressao_adm_ok = tensao_max <= pressao_adm
+    
+    # Verificação do fator de segurança ao tombamento
+    fs_tombamento_ok = fs_tombamento >= 1.5  # Valor mínimo recomendado pela NBR 11682
+
+    # Verificação do fator de segurança ao deslizamento
+    fs_deslizamento_ok = fs_deslizamento_total >= 1.0  # Valor mínimo recomendado pela NBR 11682 <- Já está incorporado no cálculo
+    
+    # Cálculo da base teórica necessária
+    # Considerando os critérios de estabilidade:
+    # 1. Tensão máxima <= pressão admissível
+    # 2. Fator de segurança contra tombamento >= 1.5
+    # 3. Fator de segurança contra deslizamento >= 1.0
+    
+    # Base teórica para satisfazer pressão admissível
+    # Aproximação: a tensão máxima é inversamente proporcional à largura da base
+    base_teorica_pressao = b_total * (tensao_max / pressao_adm) if pressao_adm > 0 else b_total
+    
+    # Base teórica para satisfazer fator de segurança contra tombamento
+    base_teorica_tombamento = b_total * (1.5 / fs_tombamento) if fs_tombamento > 0 else b_total * 1.5
+    
+    # Base teórica para satisfazer fator de segurança contra deslizamento
+    base_teorica_deslizamento = b_total * (1.0 / fs_deslizamento_total) if fs_deslizamento_total > 0 else b_total
+    
+    # Base teórica necessária é o maior valor dentre os três critérios
+    base_teorica = max(base_teorica_pressao, base_teorica_tombamento, base_teorica_deslizamento)
+    
+    # Verificação se a base teórica é menor que a base máxima permitida
+    base_ok = True
+    base_atual_ok = True
+    
+    # Verificar se a base atual é suficiente
+    base_atual_ok = base_teorica <= b_total
+    
+    # Verificar se a base teórica é menor que a base máxima permitida
+    if base_max is not None:
+        base_max_ok = base_teorica <= base_max
+        # A base só está OK se atende ambos os critérios
+        base_ok = base_atual_ok and base_max_ok
+    else:
+        base_ok = base_atual_ok
+    
+    return {
+        'fs_tombamento': fs_tombamento,
+        'fs_tombamento_ok': fs_tombamento_ok,
+        'tensao_max': tensao_max,
+        'tensao_min': tensao_min,
+        'pressao_adm_ok': pressao_adm_ok,
+        'fs_deslizamento_ok': fs_deslizamento_ok,
+        'fs_deslizamento_total': fs_deslizamento_total,
+        'excentricidade_ok': excentricidade_ok,
+        'excentricidade': excentricidade,
+        'base_teorica': base_teorica,
+        'base_atual_ok': base_atual_ok,
+        'base_max_ok': base_max_ok if base_max is not None else True,
+        'base_ok': base_ok
+    }
+
+
+def calcular_muro_gravidade(h, crista, b_mon, gamma_concreto, gamma_solo, phi, c, pressao_adm, nivel_agua=0, fs_coesao=4, fs_atrito=2, ka=0.5, base_max=None, gamma_agua=10):
+    """
+    Calcula quantitativos para muros de gravidade (seção trapezoidal)
+    
+    Parâmetros:
+    h: altura total do muro (m)
+    crista: largura da base a jusante (m)
+    b_mon: largura da base a montante (m)
+    gamma_concreto: peso específico do concreto (kN/m³)
+    gamma_solo: peso específico do solo (kN/m³)
+    phi: ângulo de atrito interno do solo (graus)
+    c: coesão do solo (kN/m²)
+    pressao_adm: pressão admissível do solo (kN/m²)
+    nivel_agua: nível d'água (m)
+    fs_coesao: fator de segurança à coesão
+    fs_atrito: fator de segurança ao atrito
+    base_max: base máxima permitida (m) [opcional]
+    """
+    # 1. Cálculos geométricos e de peso
+    area_muro = 0.5 * (b_mon - crista) * h + crista * h
+    volume_concreto = area_muro
+    peso_muro = volume_concreto * gamma_concreto
+    gamma_solo_sub = gamma_solo - gamma_agua
+    peso_solo = 0.5 * (b_mon - crista) * h * gamma_solo_sub
+    
+    # 2. Cálculo dos empuxos
+
+    ea = 0.5 * gamma_solo_sub * h**2 * ka
+    ea_agua = 0.5 * gamma_agua * h**2
+    empuxo_total = ea + ea_agua
+    
+    # 3. Verificação ao Deslizamento
+    fs_deslizamento = c * b_mon / (empuxo_total * fs_coesao) + (peso_muro + peso_solo)*math.tan(math.radians(phi)) / (empuxo_total * fs_atrito)
+    fs_deslizamento_ok = fs_deslizamento >= 1.0  # Valor mínimo recomendado pela NBR 11682 <- Já está incorporado no cálculo
+
+    # 4. Verificação ao Tombamento
+    braco_estabilizante_pt = (b_mon - crista)/3 + crista # Em relação ao ponto de tombamento
+    terra_estabilizante_pt = (b_mon - crista)*2/3 + crista    # Em relação ao ponto de tombamento
+    braco_tombamento_pt = h/3
+    fs_tombamento = (peso_muro*braco_estabilizante_pt + peso_solo*terra_estabilizante_pt) / (empuxo_total*braco_tombamento_pt)
+    fs_tombamento_ok = fs_tombamento >= 1.5  # Valor para caso de carregamento normal ELETROBRAS 2003
+
+    # 5. Verificação de Tensões na Base
+    x_cg = b_mon/2
+    y_cg = h/3 * (2*crista + b_mon)/(crista + b_mon)
+    braco_estabilizante_cg = ((b_mon - crista)/3 + crista) - x_cg # Em relação ao centro da base
+    terra_estabilizante_cg = ((b_mon - crista)*2/3 + crista) - x_cg    # Em relação ao centro da base
+    braco_tombamento = h/3
+
+    excentricidade = (b_mon)/2 - ((peso_muro*braco_estabilizante_cg + peso_solo*terra_estabilizante_cg) - ea*braco_tombamento)/(peso_muro + peso_solo)
+    momento_inercia = (1/6)*b_mon**2
+    peso_total = peso_muro + peso_solo
+    momento_total = peso_muro*braco_estabilizante_cg + peso_solo*terra_estabilizante_cg - ea*braco_tombamento
+    tensao_max = peso_total/b_mon + abs(momento_total/momento_inercia)
+    tensao_min = peso_total/b_mon - abs(momento_total/momento_inercia)
+
+    # tensao_max = (peso_muro + peso_solo)/b_mon * (1 + 6*excentricidade/b_mon)
+    # tensao_min = (peso_muro + peso_solo)/b_mon * (1 - 6*excentricidade/b_mon)
+    tensao_ok = tensao_max <= pressao_adm and tensao_min >= 0
+    
+    # Cálculo da base teórica necessária
+    # Considerando os critérios de estabilidade:
+    # 1. Tensão máxima <= pressão admissível
+    # 2. Fator de segurança contra tombamento >= 1.5
+    # 3. Fator de segurança contra deslizamento >= 1.0
+    
+    # Base teórica para satisfazer pressão admissível
+    # Aproximação: a tensão máxima é inversamente proporcional à largura da base
+    base_teorica_pressao = b_mon * (tensao_max / pressao_adm) if pressao_adm > 0 else b_mon
+    
+    # Base teórica para satisfazer fator de segurança contra tombamento
+    base_teorica_tombamento = b_mon * (1.5 / fs_tombamento) if fs_tombamento > 0 else b_mon * 1.5
+    
+    # Base teórica para satisfazer fator de segurança contra deslizamento
+    base_teorica_deslizamento = b_mon * (1.0 / fs_deslizamento) if fs_deslizamento > 0 else b_mon
+    
+    # Base teórica necessária é o maior valor dentre os três critérios
+    base_teorica = max(base_teorica_pressao, base_teorica_tombamento, base_teorica_deslizamento)
+    
+    # Verificação se a base teórica é menor que a base máxima permitida
+    base_atual_ok = base_teorica <= b_mon
+    base_max_ok = True
+    
+    # Verificar se a base teórica é menor que a base máxima permitida
+    if base_max is not None:
+        base_max_ok = base_teorica <= base_max
+    
+    # A base só está OK se atende ambos os critérios
+    base_ok = base_atual_ok and base_max_ok
+    
+    # Cálculo dos volumes de solo
+    volume_corte = 1.5 * b_mon * (h - 1)  # Fator 1.5 para inclinação de talude
+    volume_aterro = volume_corte - 0.5 * b_mon * h  # Aterro compactado atrás do muro
+    volume_descarga = max(volume_corte - volume_aterro, 0)  # Solo excedente
+    
+    return {
+        'fs_deslizamento': fs_deslizamento,
+        'fs_deslizamento_ok': fs_deslizamento_ok,
+        'fs_tombamento': fs_tombamento,
+        'fs_tombamento_ok': fs_tombamento_ok,
+        'tensao_max': tensao_max,
+        'tensao_min': tensao_min,
+        'tensao_ok': tensao_ok,
+        'peso_muro': peso_muro,
+        'peso_solo': peso_solo,
+        'base_teorica': base_teorica,
+        'base_atual_ok': base_atual_ok,
+        'base_max_ok': base_max_ok,
+        'base_ok': base_ok,
+        'volume_concreto': volume_concreto,
+        'volume_corte': volume_corte,
+        'volume_aterro': volume_aterro,
+        'volume_descarga': volume_descarga
+    }
+
+
+def validar_dados_muro_gravidade(h, crista, b_mon, gamma_concreto, gamma_solo, phi, c, pressao_adm, nivel_agua):
+    """
+    Verifica se os valores inseridos para o muro de gravidade são válidos.
+    
+    Retorna (valido, mensagem)
+    valido: True se todos os valores são válidos, False caso contrário
+    mensagem: Mensagem de erro se os valores não forem válidos
+    """
+    mensagens_erro = []
+    
+    # Verificar valores positivos
+    if h <= 0:
+        mensagens_erro.append("A altura deve ser maior que zero")
+    if crista <= 0:
+        mensagens_erro.append("A largura da crista deve ser maior que zero")
+    if b_mon <= 0:
+        mensagens_erro.append("A base deve ser maior que zero")
+    if gamma_concreto <= 0:
+        mensagens_erro.append("O peso específico do concreto deve ser maior que zero")
+    if gamma_solo <= 0:
+        mensagens_erro.append("O peso específico do solo deve ser maior que zero")
+    if pressao_adm <= 0:
+        mensagens_erro.append("A pressão admissível deve ser maior que zero")
+    if phi < 0 or phi > 45:
+        mensagens_erro.append("O ângulo de atrito deve estar entre 0 e 45 graus")
+    if c < 0:
+        mensagens_erro.append("A coesão deve ser maior ou igual a zero")
+    
+    # Verificar coerência entre valores
+    if crista >= b_mon:
+        mensagens_erro.append("A largura da crista deve ser menor que a base")
+    if nivel_agua > h:
+        mensagens_erro.append("O nível d'água não pode ser maior que a altura do muro")
+    
+    # Verificar limites típicos
+    if gamma_concreto < 18 or gamma_concreto > 28:
+        mensagens_erro.append("O peso específico do concreto está fora do intervalo típico (18-28 kN/m³)")
+    if gamma_solo < 14 or gamma_solo > 22:
+        mensagens_erro.append("O peso específico do solo está fora do intervalo típico (14-22 kN/m³)")
+    if pressao_adm > 500:
+        mensagens_erro.append("A pressão admissível parece muito alta (> 500 kN/m²)")
+    
+    # Verificar proporções comuns para muros de gravidade
+    if b_mon < 0.4 * h:
+        mensagens_erro.append("A base parece muito pequena para a altura do muro (recomenda-se base ≥ 0.4 × altura)")
+    if b_mon > 0.8 * h:
+        mensagens_erro.append("AVISO: Base muito larga em relação à altura (> 0.8 × altura)")
+    
+    if len(mensagens_erro) > 0:
+        return False, "\n".join(mensagens_erro)
+    else:
+        return True, "Valores válidos"
+
+def exibir_muro_gravidade_popup():
+    try:
+        # Obter os valores da interface principal
+        h = float(entry_h.get())
+        crista = float(entry_crista.get())
+        b_mon = float(entry_b_gravidade.get())
+        gamma_concreto = float(entry_gamma_concreto.get())
+        gamma_solo = float(entry_gamma_solo.get())
+        phi = float(entry_phi_estabilidade.get())
+        c = float(entry_coesao.get())
+        pressao_adm = float(entry_pressao_adm.get())
+        nivel_agua = h
+        fs_coesao = float(entry_fs_coesao.get())
+        fs_atrito = float(entry_fs_atrito.get())
+        ka = float(entry_coef_empuxo.get())
+        base_max = float(entry_base_max.get()) if entry_base_max.get() else None
+        
+        # Validar dados
+        valido, mensagem = validar_dados_muro_gravidade(h, crista, b_mon, gamma_concreto, 
+                                                      gamma_solo, phi, c, pressao_adm, nivel_agua)
+        
+        if not valido:
+            # Verificar se são avisos ou erros críticos
+            if "AVISO:" in mensagem:
+                resposta = messagebox.askokcancel("Aviso", 
+                                                 f"Foram detectados possíveis problemas nos dados:\n\n{mensagem}\n\nDeseja continuar mesmo assim?")
+                if not resposta:
+                    return
+            else:
+                messagebox.showerror("Erro nos dados", mensagem)
+                return
+        
+        # Calcular muro de gravidade
+        resultado = calcular_muro_gravidade(h, crista, b_mon, gamma_concreto, gamma_solo, 
+                                           phi, c, pressao_adm, nivel_agua, fs_coesao, 
+                                           fs_atrito, ka, base_max)
+        
+        # Verificar se o resultado foi bem-sucedido
+        if resultado is None:
+            messagebox.showerror("Erro", "Falha ao calcular o muro de gravidade.")
+            return
+        
+        # Plotar o muro
+        plotar_muro_gravidade(
+            h, 0, crista, b_mon, 
+            gamma_concreto, gamma_solo, phi, c, 
+            pressao_adm, nivel_agua, fs_coesao, fs_atrito, ka,
+            resultado  # Passando o resultado completo como calculos_gravidade
+        )
+        
+    except ValueError as e:
+        messagebox.showerror("Erro", f"Por favor, insira valores válidos: {str(e)}")
+    except Exception as e:
+        messagebox.showerror("Erro", f"Ocorreu um erro: {str(e)}")
+
+def gerar_quantitativos_gravidade(h, crista, b_mon, gamma_concreto, gamma_solo, phi, c, pressao_adm, nivel_agua, fs_coesao, fs_atrito, ka,
+                                 preco_concreto=350, preco_aco=8.5, diametro_barra=10, espacamento_barra=0.20, base_max=None):
+    """
+    Gera quantitativos de materiais para o muro de gravidade
+    
+    Parâmetros:
+    h: altura do muro (m)
+    crista: largura da crista (m)
+    b_mon: largura da base a montante (m)
+    gamma_concreto: peso específico do concreto (kN/m³)
+    gamma_solo: peso específico do solo (kN/m³)
+    phi: ângulo de atrito interno do solo (graus)
+    c: coesão do solo (kN/m²)
+    pressao_adm: pressão admissível do solo (kN/m²)
+    nivel_agua: nível d'água (m)
+    fs_coesao: fator de segurança à coesão
+    fs_atrito: fator de segurança ao atrito
+    ka: coeficiente de empuxo ativo
+    preco_concreto: preço do concreto (R$/m³)
+    preco_aco: preço do aço (R$/kg)
+    diametro_barra: diâmetro das barras de aço (mm)
+    espacamento_barra: espaçamento entre barras (m)
+    base_max: base máxima permitida (m) [opcional]
+    
+    Retorna:
+    dict com os quantitativos calculados
+    """
+    # Cálculos do muro de gravidade
+    resultado_gravidade = calcular_muro_gravidade(h, crista, b_mon, gamma_concreto, gamma_solo, phi, c, pressao_adm, nivel_agua, fs_coesao, fs_atrito, ka, base_max)
+    
+    # Cálculo do volume de concreto (trapézio)
+    volume_concreto = resultado_gravidade['volume_concreto']
+    
+    # Cálculo da armadura na crista
+    area_barra = math.pi * (diametro_barra/1000)**2 / 4  # m²
+    comprimento_barra = 2 + crista  # Comprimento de cada barra - Crista + 2m (+- anc para ambos os lados)
+    numero_barras = math.ceil(h / espacamento_barra)
+    volume_aco = area_barra * comprimento_barra * numero_barras  # Volume total de aço em m³
+    peso_aco = volume_aco * 7850  # kg/m (densidade do aço)
+    
+    # Pegar os volumes de solo calculados pelo muro de gravidade
+    volume_corte = resultado_gravidade['volume_corte']
+    volume_aterro = resultado_gravidade['volume_aterro']
+    volume_descarga = resultado_gravidade['volume_descarga']
+    
+    # Cálculo da área de formas
+    # Altura máxima de concretagem = 1.5m, 5 reutilizações
+    numero_camadas = math.ceil(h / 1.5)
+    comprimento_inclinado = math.sqrt((b_mon - crista)**2 + h**2)
+    area_formas = (h + comprimento_inclinado) * numero_camadas / 5
+    
+    # Divisão do volume por tipo de concreto
+    volume_concreto_25 = volume_concreto * 0.9  # 90% em concreto estrutural
+    volume_concreto_6 = volume_concreto * 0.1   # 10% em concreto de regularização
+    
+    return {
+        'volume_concreto': volume_concreto,
+        'volume_concreto_25': volume_concreto_25,
+        'volume_concreto_6': volume_concreto_6,
+        'area_aco': peso_aco,
+        'fs_deslizamento': resultado_gravidade['fs_deslizamento'],
+        'fs_tombamento': resultado_gravidade['fs_tombamento'],
+        'volume_corte': volume_corte,
+        'volume_aterro': volume_aterro,
+        'volume_descarga': volume_descarga,
+        'formas': area_formas,
+        'tensao_max': resultado_gravidade['tensao_max'],
+        'tensao_min': resultado_gravidade['tensao_min'],
+        'pressao_adm_ok': resultado_gravidade['tensao_ok'],
+        'base_teorica': resultado_gravidade['base_teorica'],
+        'base_atual_ok': resultado_gravidade['base_atual_ok'],
+        'base_max_ok': resultado_gravidade['base_max_ok'],
+        'base_ok': resultado_gravidade['base_ok']
+    }
+
+def mostrar_avisos_iniciais():
+    # Criar uma janela popup
+    janela_avisos = tk.Toplevel()
+    janela_avisos.title("Avisos Importantes")
+    janela_avisos.geometry("500x400")
+    janela_avisos.resizable(False, False)
+    janela_avisos.transient(root)  # Define como modal
+    janela_avisos.grab_set()       # Impede interação com a janela principal
+    
+    # Cabeçalho
+    tk.Label(janela_avisos, text="Avisos Importantes", font=("Arial", 14, "bold")).pack(pady=10)
+    
+    # Área de texto com barra de rolagem
+    frame_texto = tk.Frame(janela_avisos)
+    frame_texto.pack(fill="both", expand=True, padx=20, pady=10)
+    
+    scrollbar = tk.Scrollbar(frame_texto)
+    scrollbar.pack(side="right", fill="y")
+    
+    texto_avisos = tk.Text(frame_texto, wrap="word", yscrollcommand=scrollbar.set)
+    texto_avisos.pack(side="left", fill="both", expand=True)
+    scrollbar.config(command=texto_avisos.yview)
+    
+    # Conteúdo dos avisos
+    avisos = """
+    Bem-vindo ao Programa de Dimensionamento de Muros!
+    
+    AVISOS IMPORTANTES:
+    
+    1. Este programa é uma ferramenta de auxílio ao pré-dimensionamento e não substitui o julgamento profissional de um engenheiro qualificado.
+    
+    2. Os cálculos são baseados em métodos simplificados e podem não considerar todas as variáveis presentes em um projeto real.
+    
+    3. A responsabilidade pela verificação dos resultados e sua aplicação em projetos reais é inteiramente do usuário.
+    
+    4. Recomenda-se a validação dos resultados através de métodos alternativos e/ou consultoria especializada.
+    
+    5. O programa não considera análises sísmicas, condições especiais do solo ou outros fatores específicos que podem ser críticos em determinadas situações.
+    
+    Ao continuar, você confirma que leu e compreendeu estes avisos.
+    """
+    
+    texto_avisos.insert("1.0", avisos)
+    texto_avisos.config(state="disabled")  # Torna o texto não editável
+    
+    # Botão de confirmação
+    def fechar_aviso():
+        janela_avisos.destroy()
+    
+    tk.Button(janela_avisos, text="Concordo e Desejo Continuar", command=fechar_aviso, 
+              font=("Arial", 10, "bold")).pack(pady=15)
+    
+    # Esperar até que a janela seja fechada
+    root.wait_window(janela_avisos)
+
+
+def calcular_muro_contrafortes(h, b_jus, espessura, espacamento_contrafortes, h_contraforte, gamma_concreto, gamma_solo, phi, c, pressao_adm, ka=0.3):
+    """
+    Calcula quantitativos e verificações para muros com contrafortes
+    
+    Parâmetros:
+    h: altura total do muro (m)
+    b_jus: largura da base (m)
+    espessura: espessura da parede do muro (m)
+    espacamento_contrafortes: distância entre eixos dos contrafortes (m)
+    h_contraforte: altura dos contrafortes (m)
+    gamma_concreto: peso específico do concreto (kN/m³)
+    gamma_solo: peso específico do solo (kN/m³)
+    phi: ângulo de atrito interno do solo (graus)
+    c: coesão do solo (kN/m²)
+    pressao_adm: pressão admissível do solo (kN/m²)
+    ka: coeficiente de empuxo ativo
+    """
+    # 1. Cálculos geométricos
+    # Volume principal da parede do muro (paredes frontais)
+    # Cálculo para 100m de extensão linear para padronização
+    volume_muro = h * b_jus * espessura * 100  # [altura × largura base × espessura × 100m] (m³)
+    
+    # Número de contrafortes necessários para 100m lineares (número inteiro)
+    # Adiciona 1 para considerar o contraforte inicial
+    num_contrafortes = int(100 / espacamento_contrafortes) + 1
+    
+    # Volume de cada contraforte (forma triangular)
+    # Fórmula: 0.5 × altura do contraforte × espessura × altura do muro
+    volume_contraforte = 0.5 * h_contraforte * espessura * h  # (m³)
+    
+    # Volume total de concreto = volume das paredes + volume de todos os contrafortes
+    volume_total_concreto = volume_muro + volume_contraforte * num_contrafortes  # (m³)
+    
+    # 2. Peso próprio
+    # Peso total do muro de concreto = volume × peso específico
+    peso_muro = volume_total_concreto * gamma_concreto  # (kN)
+    
+    # Peso do solo sobre a base (entre a parede e o terreno)
+    # Área = h × (b_jus - espessura) × 100m
+    peso_solo = gamma_solo * h * (b_jus - espessura) * 100  # (kN)
+    
+    # 3. Empuxo ativo
+    # Fórmula clássica do empuxo ativo: 0.5 × γsolo × h² × ka
+    # Este é o empuxo total para os 100m lineares
+    ea = 0.5 * gamma_solo * h**2 * ka * 100  # (kN)
+    
+    # 4. Verificação ao Deslizamento
+    # Área da base completa para cálculo do atrito e coesão
+    area_base = b_jus * 100  # (m²)
+    
+    # Fator de segurança ao deslizamento:
+    # FS = (Forças resistentes) / (Forças solicitantes)
+    # Forças resistentes = Coesão × Área + Peso total × tan(φ)
+    fs_deslizamento = (c * area_base + (peso_muro + peso_solo) * math.tan(math.radians(phi))) / ea
+    fs_deslizamento_ok = fs_deslizamento >= 1.5  # Critério: FS ≥ 1.5
+    
+    # 5. Verificação ao Tombamento
+    # Braço de alavanca para as forças estabilizantes (centro da base)
+    braco_estabilizante = b_jus/2  # (m)
+    
+    # Braço de alavanca para o empuxo ativo (1/3 da altura)
+    braco_tombamento = h/3  # (m)
+    
+    # Momento estabilizante = Peso total × braço estabilizante
+    momento_estabilizante = (peso_muro + peso_solo) * braco_estabilizante  # (kN.m)
+    
+    # Momento de tombamento = Empuxo ativo × braço de tombamento
+    momento_tombamento = ea * braco_tombamento  # (kN.m)
+    
+    # Fator de segurança ao tombamento:
+    # FS = Momento estabilizante / Momento de tombamento
+    fs_tombamento = momento_estabilizante / momento_tombamento
+    fs_tombamento_ok = fs_tombamento >= 1.5  # Critério: FS ≥ 1.5
+    
+    # 6. Verificação de Tensões
+    # Cálculo da excentricidade da resultante:
+    # e = (Momento estabilizante - Momento tombamento) / Peso total
+    excentricidade = (momento_estabilizante - momento_tombamento) / (peso_muro + peso_solo)
+    
+    # Tensão máxima na base, usando a fórmula da flexão composta:
+    # σmax = N/A × (1 + 6e/B)
+    # Onde: N = força normal, A = área da base, e = excentricidade, B = largura da base
+    tensao_max = (peso_muro + peso_solo)/(area_base) * (1 + 6*excentricidade/b_jus)  # (kN/m²)
+    tensao_ok = tensao_max <= pressao_adm  # Verifica se a tensão máxima é aceitável
+    
+    # 7. Cálculo de materiais
+    # Área de formas: Faces laterais da cortina + Faces dos contrafortes
+    area_forms = (2 * h * 100) + (2 * h * h_contraforte * num_contrafortes)  # (m²)
+    
+    # Estimativa de peso de aço por volume de concreto (80kg/m³ é um valor típico para este tipo de estrutura)
+    peso_aco = 80 * volume_total_concreto  # (kg)
+    
+    # Espaçamento real entre contrafortes (considerando os 100m divididos pelo número de vãos)
+    espacamento_real = 100 / (num_contrafortes - 1) if num_contrafortes > 1 else espacamento_contrafortes
+    
+    return {
+        'volume_concreto': volume_total_concreto,
+        'peso_aco': peso_aco,
+        'num_contrafortes': num_contrafortes,
+        'area_forms': area_forms,
+        'fs_deslizamento': fs_deslizamento,
+        'fs_deslizamento_ok': fs_deslizamento_ok,
+        'fs_tombamento': fs_tombamento,
+        'fs_tombamento_ok': fs_tombamento_ok,
+        'tensao_max': tensao_max,
+        'tensao_ok': tensao_ok,
+        'espacamento_real': espacamento_real,
+        'excentricidade': excentricidade,
+        'peso_total': peso_muro + peso_solo,
+        'momento_estabilizante': momento_estabilizante,
+        'momento_tombamento': momento_tombamento,
+        'empuxo_ativo': ea
+    }
+
+def plotar_muro_contrafortes(h, b_jus, espessura, espacamento_contrafortes, h_contraforte, gamma_concreto, gamma_solo, tensao_max, pressao_adm, calculos_contrafortes):
+    """
+    Plota o muro de contrafortes com as dimensões especificadas e um relatório de verificação
+    
+    Parâmetros:
+    h: altura total do muro (m)
+    b_jus: largura da base (m)
+    espessura: espessura da parede do muro (m)
+    espacamento_contrafortes: distância entre eixos dos contrafortes (m)
+    h_contraforte: altura dos contrafortes (m)
+    gamma_concreto: peso específico do concreto (kN/m³)
+    gamma_solo: peso específico do solo (kN/m³)
+    tensao_max: tensão máxima calculada (kN/m²)
+    pressao_adm: pressão admissível do solo (kN/m²)
+    calculos_contrafortes: dicionário com os resultados dos cálculos
+    
+    Retorna:
+    Figure: objeto figura do matplotlib
+    """
+    # Fechar figuras existentes
+    plt.close('all')
+    
+    # Criar figura com dois subplots
+    fig, axs = plt.subplots(1, 2, figsize=(15, 8))
+    
+    # Primeiro subplot - Vista frontal (elevação)
+    ax1 = axs[0]
+    ax1.set_title('Vista frontal do muro de contrafortes', fontsize=12, fontweight='bold')
+    ax1.set_xlabel('Distância (m)', fontsize=10)
+    ax1.set_ylabel('Altura (m)', fontsize=10)
+    
+    # Definir limites do gráfico para melhor visualização
+    ax1.set_xlim(-0.5, espacamento_contrafortes + 0.5)
+    ax1.set_ylim(-0.5, h + 0.5)
+    
+    # Desenhar a parede do muro
+    # Base do muro
+    ax1.plot([0, espacamento_contrafortes], [0, 0], 'k-', linewidth=2)
+    # Parede lateral esquerda
+    ax1.plot([0, 0], [0, h], 'k-', linewidth=2)
+    # Parede lateral direita
+    ax1.plot([espacamento_contrafortes, espacamento_contrafortes], [0, h], 'k-', linewidth=2)
+    # Topo do muro
+    ax1.plot([0, espacamento_contrafortes], [h, h], 'k-', linewidth=2)
+    
+    # Preencher a parede com cor
+    ax1.fill_between([0, espacamento_contrafortes], 0, h, color='gainsboro', alpha=0.5)
+    
+    # Desenhar os contrafortes (forma triangular)
+    contraforte_x = [0, h_contraforte, h_contraforte, 0]
+    contraforte_y = [0, 0, h, h]
+    ax1.fill(contraforte_x, contraforte_y, color='silver', alpha=0.8, label='Contraforte')
+    
+    # Adicionar textos explicativos com dimensões
+    ax1.text(espacamento_contrafortes/2, h+0.2, f'Espaçamento: {espacamento_contrafortes:.2f} m', 
+             ha='center', fontweight='bold')
+    ax1.text(-0.2, h/2, f'Altura: {h:.2f} m', ha='right', fontweight='bold', rotation=90)
+    ax1.text(h_contraforte/2, h/2, f'Contraforte: {h_contraforte:.2f} m', 
+             ha='center', fontweight='bold', rotation=90)
+    ax1.text(espacamento_contrafortes/2, -0.2, f'Base: {b_jus:.2f} m', ha='center', fontweight='bold')
+    
+    # Adicionar setas para indicar as dimensões principais
+    ax1.annotate('', xy=(0, h), xytext=(-0.4, h), arrowprops=dict(arrowstyle='<->'))
+    ax1.annotate('', xy=(0, 0), xytext=(-0.4, 0), arrowprops=dict(arrowstyle='<->'))
+    ax1.annotate('', xy=(0, 0), xytext=(h_contraforte, 0), arrowprops=dict(arrowstyle='<->'))
+    
+    # Segundo subplot - Vista em planta e relatório
+    ax2 = axs[1]
+    ax2.set_title('Vista em planta e relatório de estabilidade', fontsize=12, fontweight='bold')
+    
+    # Desenhar a vista em planta (superior)
+    # Calculamos as coordenadas para representar a base do muro
+    planta_x = np.array([0, b_jus, b_jus, 0, 0])
+    planta_y = np.array([0, 0, espacamento_contrafortes, espacamento_contrafortes, 0])
+    
+    # Desenhar o contorno da base
+    ax2.plot(planta_x, planta_y, 'k-', linewidth=2)
+    # Preencher a base com cor
+    ax2.fill(planta_x, planta_y, color='gainsboro', alpha=0.5)
+    
+    # Desenhar o contraforte na vista superior
+    # O contraforte é representado como um retângulo na vista superior
+    contra_planta_x = np.array([0, h_contraforte, h_contraforte, 0, 0])
+    contra_planta_y = np.array([0, 0, espessura, espessura, 0])
+    
+    # Desenhar o contorno do contraforte
+    ax2.plot(contra_planta_x, contra_planta_y, 'k-', linewidth=2)
+    # Preencher o contraforte com cor
+    ax2.fill(contra_planta_x, contra_planta_y, color='silver', alpha=0.8)
+    
+    # Adicionar textos explicativos na vista em planta
+    ax2.text(b_jus/2, espacamento_contrafortes/2, f'Base: {b_jus:.2f} m', 
+             ha='center', fontweight='bold')
+    ax2.text(h_contraforte/2, espessura/2, f'Espessura: {espessura:.2f} m', 
+             ha='center', fontweight='bold')
+    
+    # Extrair os dados de estabilidade do dicionário
+    fs_deslizamento = calculos_contrafortes['fs_deslizamento']
+    fs_tombamento = calculos_contrafortes['fs_tombamento']
+    tensao_max = calculos_contrafortes['tensao_max']
+    num_contrafortes = calculos_contrafortes['num_contrafortes']
+    espacamento_real = calculos_contrafortes['espacamento_real']
+    
+    # Verificar a estabilidade do muro
+    fs_deslizamento_ok = fs_deslizamento >= 1.0  # Fator de segurança mínimo recomendado
+    fs_tombamento_ok = fs_tombamento >= 1.5     # Fator de segurança mínimo recomendado
+    tensao_ok = tensao_max <= pressao_adm       # A tensão máxima não deve exceder a admissível
+    
+    # Verificação global (todos os critérios devem ser satisfeitos)
+    estabilidade_ok = fs_deslizamento_ok and fs_tombamento_ok and tensao_ok
+    
+    # Se houver problemas de estabilidade, destacá-los visualmente
+    if not estabilidade_ok:
+        # Adicionar aviso destacado no topo da figura
+        problema_texto = "ATENÇÃO: MURO DE CONTRAFORTES NÃO ESTÁVEL!"
+        plt.figtext(0.5, 0.95, problema_texto, ha='center', va='top', fontsize=16, 
+                  color='white', fontweight='bold', 
+                  bbox={"facecolor":"red", "alpha":0.8, "pad":5})
+        
+        # Listar problemas específicos identificados
+        problemas = []
+        if not fs_tombamento_ok:
+            problemas.append(f"Fator de segurança ao tombamento baixo: {fs_tombamento:.2f} < 1.5")
+        if not fs_deslizamento_ok:
+            problemas.append(f"Fator de segurança ao deslizamento baixo: {fs_deslizamento:.2f} < 1.0")
+        if not tensao_ok:
+            problemas.append(f"Tensão máxima excede pressão admissível: {tensao_max:.2f} > {pressao_adm:.2f} kN/m²")
+            
+        # Mostrar os problemas específicos
+        problema_texto = "\n".join(problemas)
+        plt.figtext(0.5, 0.90, problema_texto, ha='center', va='top', fontsize=12, 
+                  color='red', fontweight='bold', 
+                  bbox={"facecolor":"lightyellow", "alpha":0.8, "pad":5})
+    
+    # Criar texto detalhado para o relatório de estabilidade
+    relatorio = (
+        f"Relatório de Estabilidade - Muro de Contrafortes:\n\n"
+        f"1. Fator de Segurança ao Deslizamento: {fs_deslizamento:.2f} "
+        f"{'(OK)' if fs_deslizamento_ok else '(NÃO OK - RISCO DE DESLIZAMENTO)'}\n\n"
+        f"2. Fator de Segurança ao Tombamento: {fs_tombamento:.2f} "
+        f"{'(OK)' if fs_tombamento_ok else '(NÃO OK - RISCO DE TOMBAMENTO)'}\n\n"
+        f"3. Tensão Máxima: {tensao_max:.2f} kN/m² "
+        f"{'(OK)' if tensao_ok else '(NÃO OK - EXCEDE CAPACIDADE DO SOLO)'}\n\n"
+        f"4. Número de contrafortes (por 100m): {num_contrafortes}\n\n"
+        f"5. Espaçamento real entre contrafortes: {espacamento_real:.2f} m\n\n"
+        f"6. Volume de concreto: {calculos_contrafortes['volume_concreto']:.2f} m³\n\n"
+        f"7. Peso de aço estimado: {calculos_contrafortes['peso_aco']:.2f} kg\n\n"
+        f"8. Área de forma: {calculos_contrafortes['area_forms']:.2f} m²\n\n"
+        f"9. Peso específico do concreto: {gamma_concreto:.2f} kN/m³\n\n"
+        f"10. Peso específico do solo: {gamma_solo:.2f} kN/m³"
+    )
+    
+    # Configurações do texto do relatório
+    props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+    ax2.text(0.05, 0.95, relatorio, transform=ax2.transAxes, fontsize=10,
+            verticalalignment='top', bbox=props)
+    
+    # Remover os eixos para deixar mais limpo
+    ax2.set_xticks([])
+    ax2.set_yticks([])
+    
+    # Ajustar o layout para evitar sobreposições
+    plt.tight_layout()
+    
+    # Mostrar a figura
+    plt.show()
+    
+    # Retornar o objeto figura para uso futuro se necessário
+    return fig
+
+def exibir_muro_contrafortes_popup():
+    """
+    Exibe um popup para entrada de dados do muro de contrafortes e mostra o resultado
+    """
+    # Criar uma nova janela
+    janela_contrafortes = tk.Toplevel()
+    janela_contrafortes.title("Configuração do Muro de Contrafortes")
+    janela_contrafortes.geometry("400x450")
+    
+    # Criar os campos de entrada
+    tk.Label(janela_contrafortes, text="Muro de Contrafortes", font=("Arial", 14, "bold")).grid(row=0, column=0, columnspan=2, pady=10)
+    
+    tk.Label(janela_contrafortes, text="Altura do muro (m):").grid(row=1, column=0, sticky="w", padx=10, pady=5)
+    entry_h_contrafortes = tk.Entry(janela_contrafortes)
+    entry_h_contrafortes.insert(0, "5.0")
+    entry_h_contrafortes.grid(row=1, column=1, padx=10, pady=5)
+    
+    tk.Label(janela_contrafortes, text="Largura da base (m):").grid(row=2, column=0, sticky="w", padx=10, pady=5)
+    entry_b_contrafortes = tk.Entry(janela_contrafortes)
+    entry_b_contrafortes.insert(0, "3.0")
+    entry_b_contrafortes.grid(row=2, column=1, padx=10, pady=5)
+    
+    tk.Label(janela_contrafortes, text="Espessura da parede (m):").grid(row=3, column=0, sticky="w", padx=10, pady=5)
+    entry_espessura = tk.Entry(janela_contrafortes)
+    entry_espessura.insert(0, "0.3")
+    entry_espessura.grid(row=3, column=1, padx=10, pady=5)
+    
+    tk.Label(janela_contrafortes, text="Espaçamento contrafortes (m):").grid(row=4, column=0, sticky="w", padx=10, pady=5)
+    entry_espacamento = tk.Entry(janela_contrafortes)
+    entry_espacamento.insert(0, "3.0")
+    entry_espacamento.grid(row=4, column=1, padx=10, pady=5)
+    
+    tk.Label(janela_contrafortes, text="Altura do contraforte (m):").grid(row=5, column=0, sticky="w", padx=10, pady=5)
+    entry_h_contraforte = tk.Entry(janela_contrafortes)
+    entry_h_contraforte.insert(0, "1.0")
+    entry_h_contraforte.grid(row=5, column=1, padx=10, pady=5)
+    
+    # Obter parâmetros do solo e concreto das entradas principais
+    def calcular_contrafortes():
+        try:
+            # Obter valores da interface
+            h = float(entry_h_contrafortes.get())
+            b_jus = float(entry_b_contrafortes.get())
+            espessura = float(entry_espessura.get())
+            espacamento_contrafortes = float(entry_espacamento.get())
+            h_contraforte = float(entry_h_contraforte.get())
+            
+            # Obter valores da interface principal
+            gamma_concreto = float(entry_gamma_concreto.get())
+            gamma_solo = float(entry_gamma_solo.get())
+            phi = float(entry_phi_estabilidade.get())
+            c = float(entry_coesao.get())
+            pressao_adm = float(entry_pressao_adm.get())
+            ka = float(entry_coef_empuxo.get())
+            
+            # Validar dados
+            if h <= 0 or b_jus <= 0 or espessura <= 0 or espacamento_contrafortes <= 0 or h_contraforte <= 0:
+                messagebox.showerror("Erro", "Todas as dimensões devem ser positivas.")
+                return
+            
+            if h_contraforte > b_jus:
+                messagebox.showwarning("Aviso", "A altura do contraforte excede a largura da base. Isso pode causar instabilidade.")
+            
+            if espacamento_contrafortes < espessura:
+                messagebox.showerror("Erro", "O espaçamento entre contrafortes deve ser maior que a espessura da parede.")
+                return
+            
+            # Calcular o muro de contrafortes
+            calculos_contrafortes = calcular_muro_contrafortes(
+                h, b_jus, espessura, espacamento_contrafortes, h_contraforte,
+                gamma_concreto, gamma_solo, phi, c, pressao_adm, ka
+            )
+            
+            # Mostrar resultados
+            plotar_muro_contrafortes(
+                h, b_jus, espessura, espacamento_contrafortes, h_contraforte,
+                gamma_concreto, gamma_solo, calculos_contrafortes['tensao_max'], 
+                pressao_adm, calculos_contrafortes
+            )
+            
+        except ValueError:
+            messagebox.showerror("Erro", "Por favor, insira valores válidos.")
+        except Exception as e:
+            messagebox.showerror("Erro", f"Ocorreu um erro: {str(e)}")
+    
+    # Botão para calcular
+    btn_calcular = tk.Button(janela_contrafortes, text="Calcular e Visualizar", command=calcular_contrafortes)
+    btn_calcular.grid(row=6, column=0, columnspan=2, pady=20)
+    
+    # Informações adicionais
+    info_texto = (
+        "O muro de contrafortes consiste em uma parede estrutural com\n"
+        "reforços (contrafortes) na direção perpendicular ao empuxo.\n"
+        "É uma solução econômica para muros altos, com economia\n"
+        "significativa de concreto em relação a um muro de gravidade."
+    )
+    
+    info_label = tk.Label(janela_contrafortes, text=info_texto, justify="left", wraplength=380)
+    info_label.grid(row=7, column=0, columnspan=2, padx=10, pady=20)
+    
+    # Centralizar a janela
+    janela_contrafortes.update_idletasks()
+    width = janela_contrafortes.winfo_width()
+    height = janela_contrafortes.winfo_height()
+    x = (janela_contrafortes.winfo_screenwidth() // 2) - (width // 2)
+    y = (janela_contrafortes.winfo_screenheight() // 2) - (height // 2)
+    janela_contrafortes.geometry('{}x{}+{}+{}'.format(width, height, x, y))
+    
+    # Tornar a janela modal
+    janela_contrafortes.transient(root)
+    janela_contrafortes.grab_set()
+    
+    # Iniciar loop da janela
+    janela_contrafortes.mainloop()
+
+def gerar_quantitativos_contrafortes(h, b_jus, espessura, espacamento_contrafortes, h_contraforte, gamma_concreto, gamma_solo, phi, c, pressao_adm, ka=0.3):
+    """
+    Gera quantitativos de materiais para o muro de contrafortes
+    
+    Parâmetros:
+    h: altura total do muro (m)
+    b_jus: largura da base (m)
+    espessura: espessura da parede do muro (m)
+    espacamento_contrafortes: distância entre eixos dos contrafortes (m)
+    h_contraforte: altura dos contrafortes (m)
+    gamma_concreto: peso específico do concreto (kN/m³)
+    gamma_solo: peso específico do solo (kN/m³)
+    phi: ângulo de atrito interno do solo (graus)
+    c: coesão do solo (kN/m²)
+    pressao_adm: pressão admissível do solo (kN/m²)
+    ka: coeficiente de empuxo ativo
+    
+    Retorna:
+    dict com os quantitativos calculados
+    """
+    # Obter os cálculos básicos da estrutura através da função calcular_muro_contrafortes
+    # Esta função fornece volumes, pesos, fatores de segurança e demais dados estruturais
+    calculos_contrafortes = calcular_muro_contrafortes(
+        h, b_jus, espessura, espacamento_contrafortes, h_contraforte,
+        gamma_concreto, gamma_solo, phi, c, pressao_adm, ka
+    )
+    
+    # Conversão dos valores para metro linear de muro
+    # Os cálculos anteriores são para 100m de muro, então dividimos por 100
+    volume_concreto = calculos_contrafortes['volume_concreto'] / 100  # (m³/m)
+    
+    # Dividir o concreto em estrutural e de regularização
+    # Para muros de contrafortes, devido à necessidade de resistência estrutural:
+    # - 95% do volume é de concreto estrutural (fck≥25MPa)
+    # - 5% é de concreto de regularização (fck≈6MPa) para nivelamento da base
+    volume_concreto_25 = volume_concreto * 0.95  # Concreto estrutural (m³/m)
+    volume_concreto_6 = volume_concreto * 0.05   # Concreto de regularização (m³/m)
+    
+    # Quantidade de aço por metro linear
+    # Baseado em proporção típica para este tipo de estrutura - já calculado anteriormente
+    peso_aco = calculos_contrafortes['peso_aco'] / 100  # (kg/m)
+    
+    # Volumes de solo envolvidos na construção
+    # Volume de escavação estimado considerando uma área de trabalho maior que a base
+    # Normalmente escava-se uma área 1.5 vezes maior que a base e até a altura total
+    volume_corte = 1.5 * b_jus * h  # Volume de escavação (m³/m)
+    
+    # Do volume escavado, parte é reutilizada para aterro (material de reenchimento)
+    # e parte é descartada (material excedente)
+    # Proporção típica: 70% reutilizado, 30% descartado
+    volume_aterro = volume_corte * 0.7  # Volume de reaterro (m³/m)
+    volume_descarga = volume_corte * 0.3  # Volume descartado (m³/m)
+    
+    # Área de formas por metro linear de muro
+    # Baseado nas formas necessárias para concretagem das paredes e contrafortes
+    area_formas = calculos_contrafortes['area_forms'] / 100  # (m²/m)
+    
+    # Fatores de segurança ao deslizamento e tombamento
+    fs_deslizamento = calculos_contrafortes['fs_deslizamento']
+    fs_tombamento = calculos_contrafortes['fs_tombamento']
+    
+    # Verificações de estabilidade conforme normas técnicas
+    # Critérios mínimos para fatores de segurança ao deslizamento e tombamento: FS ≥ 1.5
+    fs_deslizamento_ok = fs_deslizamento >= 1.5
+    fs_tombamento_ok = fs_tombamento >= 1.5
+    
+    # Verificação de tensões no solo
+    tensao_max = calculos_contrafortes['tensao_max']
+    tensao_ok = calculos_contrafortes['tensao_ok']
+    
+    # Verificação geral de estabilidade
+    # A estrutura só é considerada estável se todas as verificações individuais forem satisfeitas
+    estabilidade_ok = fs_deslizamento_ok and fs_tombamento_ok and tensao_ok
+    
+    # Dados adicionais importantes para o projeto
+    num_contrafortes_por_metro = calculos_contrafortes['num_contrafortes'] / 100
+    espacamento_real = calculos_contrafortes['espacamento_real']
+    
+    # Retorno de todos os dados calculados em um dicionário organizado
+    return {
+        # Volumes de concreto
+        'volume_concreto': volume_concreto,        # Volume total (m³/m)
+        'volume_concreto_25': volume_concreto_25,  # Concreto estrutural (m³/m)
+        'volume_concreto_6': volume_concreto_6,    # Concreto de regularização (m³/m)
+        
+        # Aço e formas
+        'area_aco': peso_aco,      # Peso de aço (kg/m)
+        'formas': area_formas,     # Área de formas (m²/m)
+        
+        # Volumes de solo
+        'volume_corte': volume_corte,      # Escavação (m³/m)
+        'volume_aterro': volume_aterro,    # Reaterro (m³/m)
+        'volume_descarga': volume_descarga, # Material descartado (m³/m)
+        
+        # Verificações de estabilidade
+        'fs_deslizamento': fs_deslizamento,
+        'fs_deslizamento_ok': fs_deslizamento_ok,
+        'fs_tombamento': fs_tombamento,
+        'fs_tombamento_ok': fs_tombamento_ok,
+        'tensao_max': tensao_max,
+        'tensao_ok': tensao_ok,
+        'estabilidade_ok': estabilidade_ok,
+        
+        # Dados do projeto
+        'num_contrafortes': calculos_contrafortes['num_contrafortes'],
+        'espacamento_real': espacamento_real
+    }
+
+# Variáveis globais para armazenar os custos
+entry_custo_concreto_25_mat = None
+entry_custo_concreto_6_mat = None
+entry_custo_aco_ca50_mat = None
+entry_custo_forma_mat = None
+
+entry_custo_concreto_25_mdo = None
+entry_custo_concreto_6_mdo = None
+entry_custo_aco_ca50_mdo = None
+entry_custo_aterro_mdo = None
+entry_custo_corte_mdo = None
+entry_custo_carga_mdo = None
+entry_custo_descarga_mdo = None
+entry_custo_forma_mdo = None
+
+label_info_custos = None
+
+def inicializar_campos_custo(root):
+    """
+    Inicializa os campos de custo na interface
+    """
+    global entry_custo_concreto_25_mat, entry_custo_concreto_6_mat, entry_custo_aco_ca50_mat, entry_custo_forma_mat
+    global entry_custo_concreto_25_mdo, entry_custo_concreto_6_mdo, entry_custo_aco_ca50_mdo
+    global entry_custo_aterro_mdo, entry_custo_corte_mdo, entry_custo_carga_mdo, entry_custo_descarga_mdo, entry_custo_forma_mdo
+    global label_info_custos
+
+    # Campos ocultos para armazenar os valores de custo - MATERIAIS
+    entry_custo_concreto_25_mat = tk.Entry(root)
+    entry_custo_concreto_25_mat.insert(0, "250")  # Valor default
+    entry_custo_concreto_25_mat.grid_remove()  # Ocultar o campo
+
+    entry_custo_concreto_6_mat = tk.Entry(root)
+    entry_custo_concreto_6_mat.insert(0, "150")  # Valor default
+    entry_custo_concreto_6_mat.grid_remove()  # Ocultar o campo
+
+    entry_custo_aco_ca50_mat = tk.Entry(root)
+    entry_custo_aco_ca50_mat.insert(0, "8")  # Valor default
+    entry_custo_aco_ca50_mat.grid_remove()  # Ocultar o campo
+
+    entry_custo_forma_mat = tk.Entry(root)
+    entry_custo_forma_mat.insert(0, "15")  # Valor default
+    entry_custo_forma_mat.grid_remove()  # Ocultar o campo
+
+    # Campos ocultos para armazenar os valores de custo - MÃO DE OBRA
+    entry_custo_concreto_25_mdo = tk.Entry(root)
+    entry_custo_concreto_25_mdo.insert(0, "50")  # Valor default
+    entry_custo_concreto_25_mdo.grid_remove()  # Ocultar o campo
+
+    entry_custo_concreto_6_mdo = tk.Entry(root)
+    entry_custo_concreto_6_mdo.insert(0, "50")  # Valor default
+    entry_custo_concreto_6_mdo.grid_remove()  # Ocultar o campo
+
+    entry_custo_aco_ca50_mdo = tk.Entry(root)
+    entry_custo_aco_ca50_mdo.insert(0, "2")  # Valor default
+    entry_custo_aco_ca50_mdo.grid_remove()  # Ocultar o campo
+
+    entry_custo_aterro_mdo = tk.Entry(root)
+    entry_custo_aterro_mdo.insert(0, "50")  # Valor default
+    entry_custo_aterro_mdo.grid_remove()  # Ocultar o campo
+
+    entry_custo_corte_mdo = tk.Entry(root)
+    entry_custo_corte_mdo.insert(0, "50")  # Valor default
+    entry_custo_corte_mdo.grid_remove()  # Ocultar o campo
+
+    entry_custo_carga_mdo = tk.Entry(root)
+    entry_custo_carga_mdo.insert(0, "50")  # Valor default
+    entry_custo_carga_mdo.grid_remove()  # Ocultar o campo
+
+    entry_custo_descarga_mdo = tk.Entry(root)
+    entry_custo_descarga_mdo.insert(0, "50")  # Valor default
+    entry_custo_descarga_mdo.grid_remove()  # Ocultar o campo
+
+    entry_custo_forma_mdo = tk.Entry(root)
+    entry_custo_forma_mdo.insert(0, "5")  # Valor default
+    entry_custo_forma_mdo.grid_remove()  # Ocultar o campo
+
+    # Criar um frame para o botão e informações de custo
+    frame_custos = tk.Frame(root)
+    frame_custos.grid(row=0, column=4, columnspan=2, pady=10, padx=10, sticky="nw")
+
+    # Título da seção
+    tk.Label(frame_custos, text="Custos:", font=("Arial", 14)).pack(pady=5, anchor="w")
+
+    # Botão para editar custos
+    btn_editar_custos = tk.Button(frame_custos, text="Editar Custos de Materiais", command=editar_custos_popup)
+    btn_editar_custos.pack(pady=5)
+
+    # Label para mostrar informações resumidas sobre custos
+    label_info_custos = tk.Label(frame_custos, text="Clique para editar custos", wraplength=200)
+    label_info_custos.pack(pady=5)
+
+    # Atualizar as informações de custos ao iniciar
+    atualizar_info_custos()
+
+def editar_custos_popup():
+    """
+    Exibe um popup para edição dos custos dos materiais e mão de obra
+    """
+    # Criar uma nova janela
+    janela_custos = tk.Toplevel()
+    janela_custos.title("Edição de Custos")
+    janela_custos.geometry("600x700")
+    janela_custos.resizable(False, False)
+    janela_custos.transient()  # Define como modal
+    janela_custos.grab_set()       # Impede interação com a janela principal
+
+    # Cabeçalho Materiais
+    tk.Label(janela_custos, text="Custos de Materiais", font=("Arial", 14, "bold")).grid(row=0, column=0, columnspan=3, pady=10)
+    
+    # Criar os campos de entrada - MATERIAIS
+    tk.Label(janela_custos, text="Material", font=("Arial", 10, "bold")).grid(row=1, column=1)
+    tk.Label(janela_custos, text="Custo (R$)", font=("Arial", 10, "bold")).grid(row=1, column=2)
+    
+    tk.Label(janela_custos, text="Concreto Estrutural (m³):").grid(row=2, column=1, sticky="w", padx=10, pady=5)
+    entry_concreto_25_mat = tk.Entry(janela_custos)
+    entry_concreto_25_mat.insert(0, "250")  # Valor default
+    entry_concreto_25_mat.grid(row=2, column=2, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Concreto Massa (m³):").grid(row=3, column=1, sticky="w", padx=10, pady=5)
+    entry_concreto_6_mat = tk.Entry(janela_custos)
+    entry_concreto_6_mat.insert(0, "150")  # Valor default
+    entry_concreto_6_mat.grid(row=3, column=2, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Aço CA50 (kg):").grid(row=4, column=1, sticky="w", padx=10, pady=5)
+    entry_aco_ca50_mat = tk.Entry(janela_custos)
+    entry_aco_ca50_mat.insert(0, "8")  # Valor default
+    entry_aco_ca50_mat.grid(row=4, column=2, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Forma (m²):").grid(row=5, column=1, sticky="w", padx=10, pady=5)
+    entry_forma_mat = tk.Entry(janela_custos)
+    entry_forma_mat.insert(0, "15")  # Valor default
+    entry_forma_mat.grid(row=5, column=2, padx=10, pady=5)
+    
+    # Cabeçalho Mão de Obra
+    tk.Label(janela_custos, text="Custos de Mão de Obra", font=("Arial", 14, "bold")).grid(row=6, column=0, columnspan=3, pady=20)
+    
+    # Criar os campos de entrada - MÃO DE OBRA
+    tk.Label(janela_custos, text="Serviço", font=("Arial", 10, "bold")).grid(row=7, column=1)
+    tk.Label(janela_custos, text="Custo (R$)", font=("Arial", 10, "bold")).grid(row=7, column=2)
+    
+    tk.Label(janela_custos, text="Execução Concreto Estrutural (m³):").grid(row=8, column=1, sticky="w", padx=10, pady=5)
+    entry_concreto_25_mdo = tk.Entry(janela_custos)
+    entry_concreto_25_mdo.insert(0, "50")  # Valor default
+    entry_concreto_25_mdo.grid(row=8, column=2, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Execução Concreto Massa (m³):").grid(row=9, column=1, sticky="w", padx=10, pady=5)
+    entry_concreto_6_mdo = tk.Entry(janela_custos)
+    entry_concreto_6_mdo.insert(0, "50")  # Valor default
+    entry_concreto_6_mdo.grid(row=9, column=2, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Montagem Armadura (kg):").grid(row=10, column=1, sticky="w", padx=10, pady=5)
+    entry_aco_ca50_mdo = tk.Entry(janela_custos)
+    entry_aco_ca50_mdo.insert(0, "2")  # Valor default
+    entry_aco_ca50_mdo.grid(row=10, column=2, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Aterro (m³):").grid(row=11, column=1, sticky="w", padx=10, pady=5)
+    entry_aterro_mdo = tk.Entry(janela_custos)
+    entry_aterro_mdo.insert(0, "50")  # Valor default
+    entry_aterro_mdo.grid(row=11, column=2, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Corte (m³):").grid(row=12, column=1, sticky="w", padx=10, pady=5)
+    entry_corte_mdo = tk.Entry(janela_custos)
+    entry_corte_mdo.insert(0, "50")  # Valor default
+    entry_corte_mdo.grid(row=12, column=2, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Carga (m³):").grid(row=13, column=1, sticky="w", padx=10, pady=5)
+    entry_carga_mdo = tk.Entry(janela_custos)
+    entry_carga_mdo.insert(0, "50")  # Valor default
+    entry_carga_mdo.grid(row=13, column=2, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Descarga (m³):").grid(row=14, column=1, sticky="w", padx=10, pady=5)
+    entry_descarga_mdo = tk.Entry(janela_custos)
+    entry_descarga_mdo.insert(0, "50")  # Valor default
+    entry_descarga_mdo.grid(row=14, column=2, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Montagem Forma (m²):").grid(row=15, column=1, sticky="w", padx=10, pady=5)
+    entry_forma_mdo = tk.Entry(janela_custos)
+    entry_forma_mdo.insert(0, "5")  # Valor default
+    entry_forma_mdo.grid(row=15, column=2, padx=10, pady=5)
+    
+    
+    # Variáveis para armazenar os valores atuais - MATERIAIS
+    valor_concreto_25_mat = tk.StringVar(value=entry_custo_concreto_25_mat.get())
+    valor_concreto_6_mat = tk.StringVar(value=entry_custo_concreto_6_mat.get())
+    valor_aco_ca50_mat = tk.StringVar(value=entry_custo_aco_ca50_mat.get())
+    valor_forma_mat = tk.StringVar(value=entry_custo_forma_mat.get())
+    
+    # Variáveis para armazenar os valores atuais - MÃO DE OBRA
+    valor_concreto_25_mdo = tk.StringVar(value=entry_custo_concreto_25_mdo.get())
+    valor_concreto_6_mdo = tk.StringVar(value=entry_custo_concreto_6_mdo.get())
+    valor_aco_ca50_mdo = tk.StringVar(value=entry_custo_aco_ca50_mdo.get())
+    valor_aterro_mdo = tk.StringVar(value=entry_custo_aterro_mdo.get())
+    valor_corte_mdo = tk.StringVar(value=entry_custo_corte_mdo.get())
+    valor_carga_mdo = tk.StringVar(value=entry_custo_carga_mdo.get())
+    valor_descarga_mdo = tk.StringVar(value=entry_custo_descarga_mdo.get())
+    valor_forma_mdo = tk.StringVar(value=entry_custo_forma_mdo.get())
+
+    # Função para aplicar as alterações
+    def aplicar_custos():
+        try:
+            # Validar os valores - MATERIAIS
+            custos_mat = [
+                float(valor_concreto_25_mat.get()),
+                float(valor_concreto_6_mat.get()),
+                float(valor_aco_ca50_mat.get()),
+                float(valor_forma_mat.get())
+            ]
+            
+            # Validar os valores - MÃO DE OBRA
+            custos_mdo = [
+                float(valor_concreto_25_mdo.get()),
+                float(valor_concreto_6_mdo.get()),
+                float(valor_aco_ca50_mdo.get()),
+                float(valor_aterro_mdo.get()),
+                float(valor_corte_mdo.get()),
+                float(valor_carga_mdo.get()),
+                float(valor_descarga_mdo.get()),
+                float(valor_forma_mdo.get())
+            ]
+            
+            # Verificar se os valores são positivos
+            if any(custo < 0 for custo in custos_mat + custos_mdo):
+                messagebox.showerror("Erro", "Os custos devem ser valores positivos.")
+                return
+                
+            # Atualizar os valores nos campos da interface principal - MATERIAIS
+            entry_custo_concreto_25_mat.delete(0, tk.END)
+            entry_custo_concreto_25_mat.insert(0, valor_concreto_25_mat.get())
+            
+            entry_custo_concreto_6_mat.delete(0, tk.END)
+            entry_custo_concreto_6_mat.insert(0, valor_concreto_6_mat.get())
+            
+            entry_custo_aco_ca50_mat.delete(0, tk.END)
+            entry_custo_aco_ca50_mat.insert(0, valor_aco_ca50_mat.get())
+            
+            entry_custo_forma_mat.delete(0, tk.END)
+            entry_custo_forma_mat.insert(0, valor_forma_mat.get())
+            
+            # Atualizar os valores nos campos da interface principal - MÃO DE OBRA
+            entry_custo_concreto_25_mdo.delete(0, tk.END)
+            entry_custo_concreto_25_mdo.insert(0, valor_concreto_25_mdo.get())
+            
+            entry_custo_concreto_6_mdo.delete(0, tk.END)
+            entry_custo_concreto_6_mdo.insert(0, valor_concreto_6_mdo.get())
+            
+            entry_custo_aco_ca50_mdo.delete(0, tk.END)
+            entry_custo_aco_ca50_mdo.insert(0, valor_aco_ca50_mdo.get())
+            
+            entry_custo_aterro_mdo.delete(0, tk.END)
+            entry_custo_aterro_mdo.insert(0, valor_aterro_mdo.get())
+            
+            entry_custo_corte_mdo.delete(0, tk.END)
+            entry_custo_corte_mdo.insert(0, valor_corte_mdo.get())
+            
+            entry_custo_carga_mdo.delete(0, tk.END)
+            entry_custo_carga_mdo.insert(0, valor_carga_mdo.get())
+            
+            entry_custo_descarga_mdo.delete(0, tk.END)
+            entry_custo_descarga_mdo.insert(0, valor_descarga_mdo.get())
+            
+            entry_custo_forma_mdo.delete(0, tk.END)
+            entry_custo_forma_mdo.insert(0, valor_forma_mdo.get())
+            
+            # Atualizar o rótulo do botão de custos com o valor total
+            atualizar_info_custos()
+            
+            # Fechar a janela
+            janela_custos.destroy()
+            
+            # Se já existem cálculos, atualizar os resultados
+            try:
+                calcular()
+            except:
+                pass
+                
+        except ValueError:
+            messagebox.showerror("Erro", "Por favor, insira apenas valores numéricos válidos.")
+    
+    # Botões
+    frame_botoes = tk.Frame(janela_custos)
+    frame_botoes.grid(row=16, column=0, columnspan=3, pady=20)
+    
+    btn_aplicar = tk.Button(frame_botoes, text="Aplicar", command=aplicar_custos)
+    btn_aplicar.pack(side="left", padx=10)
+    
+    btn_cancelar = tk.Button(frame_botoes, text="Cancelar", command=janela_custos.destroy)
+    btn_cancelar.pack(side="left", padx=10)
+    
+    # Informações adicionais
+    info_texto = (
+        "Os custos definidos aqui serão utilizados para calcular\n"
+        "o orçamento das diferentes soluções de muro.\n"
+        "Certifique-se de utilizar valores atualizados de mercado."
+    )
+    
+    info_label = tk.Label(janela_custos, text=info_texto, justify="left", wraplength=400)
+    info_label.grid(row=17, column=0, columnspan=3, padx=10, pady=10)
+    
+    # Centralizar a janela
+    janela_custos.update_idletasks()
+    width = janela_custos.winfo_width()
+    height = janela_custos.winfo_height()
+    x = (janela_custos.winfo_screenwidth() // 2) - (width // 2)
+    y = (janela_custos.winfo_screenheight() // 2) - (height // 2)
+    janela_custos.geometry('{}x{}+{}+{}'.format(width, height, x, y))
+    
+    # Iniciar loop da janela
+    janela_custos.mainloop()
+
+
+def atualizar_info_custos():
+    """
+    Atualiza o rótulo do botão de custos com informações resumidas
+    """
+    try:
+        conc_25 = float(entry_custo_concreto_25_mat.get())+float(entry_custo_concreto_25_mdo.get())
+        conc_6 = float(entry_custo_concreto_6_mat.get())+float(entry_custo_concreto_6_mdo.get())
+        aco = float(entry_custo_aco_ca50_mat.get())+float(entry_custo_aco_ca50_mdo.get())
+        aterro = float(entry_custo_aterro_mdo.get())+float(entry_custo_corte_mdo.get())
+        corte = float(entry_custo_carga_mdo.get())+float(entry_custo_descarga_mdo.get())
+        forma = float(entry_custo_forma_mdo.get())
+        
+        texto = f"Concreto: R${conc_25:.2f}/m³ | Aço: R${aco:.2f}/kg | Aterro: R${aterro:.2f}/m³ | Corte: R${corte:.2f}/m³ | Forma: R${forma:.2f}/m²"
+        label_info_custos.config(text=texto)
+    except:
+        label_info_custos.config(text="Clique para editar custos") 
+
+# Criar a janela principal
+root = tk.Tk()
+# Mostrar avisos antes de continuar
+mostrar_avisos_iniciais()
+
+root.title("Dimensionamento de Muro de Arrimo")
+
+# Novos campos de entrada para os parâmetros de estabilidade
+tk.Label(root, text="Param. Muro Flexão:", font=("Arial", 12)).grid(row=0, column=2, columnspan=2)
+
+tk.Label(root, text="Largura da base do muro a jusante (m):").grid(row=1, column=2)
+entry_b_jus = tk.Entry(root)
+entry_b_jus.insert(0, "1")  # Valor default
+entry_b_jus.grid(row=1, column=3)
+
+tk.Label(root, text="Largura da base do muro a montante (m):").grid(row=2, column=2)
+entry_b_mon = tk.Entry(root)
+entry_b_mon.insert(0, "1.6")  # Valor default
+entry_b_mon.grid(row=2, column=3)
+
+# Ajustar a posição dos campos seguintes
+# tk.Label(root, text="fck do concreto estrutural (MPa):").grid(row=3, column=2)
+entry_fck = tk.Entry(root)
+entry_fck.insert(0, "25")  # Valor default
+entry_fck.grid_remove() # Ocultar o campo
+# entry_fck.grid(row=3, column=3)
+
+# ------------------------------------------ NÃO ESQUECER DE COLOCAR A FCK NO RELATÓRIO
+
+# Novos campos de entrada para os parâmetros de estabilidade
+tk.Label(root, text="Param. Muro Gravidade:", font=("Arial", 12)).grid(row=5, column=2, columnspan=2)
+
+tk.Label(root, text="Largura da base do muro a montante (m):").grid(row=6, column=2)
+entry_b_gravidade = tk.Entry(root)
+entry_b_gravidade.insert(0, "2.5")  # Valor default
+entry_b_gravidade.grid(row=6, column=3)
+
+tk.Label(root, text="Largura crista (m):").grid(row=7, column=2)
+entry_crista = tk.Entry(root)
+entry_crista.insert(0, "0.5")  # Valor default
+entry_crista.grid(row=7, column=3)
+
+# tk.Label(root, text="fck do concreto massa (MPa):").grid(row=8, column=2)
+entry_fck_massa = tk.Entry(root)
+entry_fck_massa.insert(0, "6")  # Valor default
+entry_fck_massa.grid_remove() # Ocultar o campo
+# entry_fck_massa.grid(row=8, column=3)
+
+
+
+# Novos campos de entrada para os parâmetros de estabilidade
+tk.Label(root, text="Parâmetros gerais:", font=("Arial", 12)).grid(row=0, column=0, columnspan=2)
+
+# Criar os campos de entrada com valores default
+tk.Label(root, text="Altura do muro (m):").grid(row=1, column=0)
+entry_h = tk.Entry(root)
+entry_h.insert(0, "5.0")  # Valor default
+entry_h.grid(row=1, column=1)
+
+tk.Label(root, text="Peso específico do solo (kN/m³):").grid(row=2, column=0)
+entry_gamma_solo = tk.Entry(root)
+entry_gamma_solo.insert(0, "18")  # Valor default
+entry_gamma_solo.grid(row=2, column=1)
+
+# tk.Label(root, text="fyk do aço (MPa):").grid(row=4, column=0)
+entry_fyk = tk.Entry(root)
+entry_fyk.insert(0, "500")  # Valor default
+entry_fyk.grid_remove() # Ocultar o campo
+# entry_fyk.grid(row=4, column=1)
+
+# Criar os campos de entrada com valores default
+tk.Label(root, text="Altura do muro (m):").grid(row=1, column=0)
+entry_h = tk.Entry(root)
+entry_h.insert(0, "5.0")  # Valor default
+entry_h.grid(row=1, column=1)
+
+tk.Label(root, text="Peso específico do solo (kN/m³):").grid(row=2, column=0)
+entry_gamma_solo = tk.Entry(root)
+entry_gamma_solo.insert(0, "18")  # Valor default
+entry_gamma_solo.grid(row=2, column=1)
+
+tk.Label(root, text="Ângulo de atrito do aterro (graus):").grid(row=3, column=0)
+entry_phi_aterro = tk.Entry(root)
+entry_phi_aterro.insert(0, "30")  # Valor default
+entry_phi_aterro.grid(row=3, column=1)
+
+
+
+# ---------------------------------------------------------------- #
+
+
+"""
+# Criar os campos de entrada com valores default
+tk.Label(root, text="Altura do muro (m):").grid(row=1, column=-2)
+entry_h = tk.Entry(root)
+entry_h.insert(0, "5.0")  # Valor default
+entry_h.grid(row=1, column=-1)
+
+
+
+
+tk.Label(root, text="Largura da base do muro a jusante (m):").grid(row=2, column=-2)
+entry_b_jus = tk.Entry(root)
+entry_b_jus.insert(0, "0.5")  # Valor default
+entry_b_jus.grid(row=2, column=-1)
+
+
+tk.Label(root, text="Largura da base do muro a montante (m):").grid(row=3, column=-2)
+entry_b_mon = tk.Entry(root)
+entry_b_mon.insert(0, "1.5")  # Valor default
+entry_b_mon.grid(row=3, column=-1)
+
+
+tk.Label(root, text="Altura útil (m):").grid(row=8, column=-2)
+entry_d = tk.Entry(root)
+entry_d.insert(0, "0.5")  # Valor default
+entry_d.grid(row=8, column=-1)
+
+
+tk.Label(root, text="Peso específico do solo (kN/m³):").grid(row=4, column=-2)
+entry_gamma_solo = tk.Entry(root)
+entry_gamma_solo.insert(0, "18")  # Valor default
+entry_gamma_solo.grid(row=4, column=-1)
+
+
+tk.Label(root, text="Ângulo de atrito do solo (graus):").grid(row=5, column=-2)
+entry_phi = tk.Entry(root)
+entry_phi.insert(0, "30")  # Valor default
+entry_phi.grid(row=5, column=-1)
+
+
+tk.Label(root, text="fck do concreto (MPa):").grid(row=6, column=-2)
+entry_fck = tk.Entry(root)
+entry_fck.insert(0, "25")  # Valor default
+entry_fck.grid(row=6, column=-1)
+
+
+tk.Label(root, text="fyk do aço (MPa):").grid(row=7, column=-2)
+entry_fyk = tk.Entry(root)
+entry_fyk.insert(0, "500")  # Valor default
+entry_fyk.grid(row=7, column=-1)
+
+"""
+
+# ---------------------------------------------------------------- #
+"""
+# Novos campos de entrada para os parâmetros de estabilidade
+tk.Label(root, text="Custos:", font=("Arial", 14)).grid(row=0, column=4, columnspan=2)
+
+# Novos campos de custo
+tk.Label(root, text="Custo Concreto Estrutural (R$/m³):").grid(row=1, column=4)
+entry_custo_concreto_25 = tk.Entry(root)
+entry_custo_concreto_25.insert(0, "300")  # Valor default
+entry_custo_concreto_25.grid(row=1, column=5)
+
+
+tk.Label(root, text="Custo Concreto Massa (R$/m³):").grid(row=2, column=4)
+entry_custo_concreto_6 = tk.Entry(root)
+entry_custo_concreto_6.insert(0, "200")  # Valor default
+entry_custo_concreto_6.grid(row=2, column=5)
+
+
+tk.Label(root, text="Custo Aço CA50 (R$/kg):").grid(row=3, column=4)
+entry_custo_aco_ca50 = tk.Entry(root)
+entry_custo_aco_ca50.insert(0, "5")  # Valor default
+entry_custo_aco_ca50.grid(row=3, column=5)
+
+
+tk.Label(root, text="Custo Solo - Aterro (R$/m³):").grid(row=4, column=4)
+entry_custo_aterro = tk.Entry(root)
+entry_custo_aterro.insert(0, "50")  # Valor default
+entry_custo_aterro.grid(row=4, column=5)
+
+
+tk.Label(root, text="Custo Solo - Corte (R$/m³):").grid(row=5, column=4)
+entry_custo_corte = tk.Entry(root)
+entry_custo_corte.insert(0, "50")  # Valor default
+entry_custo_corte.grid(row=5, column=5)
+
+
+tk.Label(root, text="Custo Solo - Carga (R$/m³):").grid(row=6, column=4)
+entry_custo_carga = tk.Entry(root)
+entry_custo_carga.insert(0, "50")  # Valor default
+entry_custo_carga.grid(row=6, column=5)
+
+
+tk.Label(root, text="Custo Solo - Descarga (R$/m³):").grid(row=7, column=4)
+entry_custo_descarga = tk.Entry(root)
+entry_custo_descarga.insert(0, "50")  # Valor default
+entry_custo_descarga.grid(row=7, column=5)
+
+
+tk.Label(root, text="Custo Forma (R$/m²):").grid(row=8, column=4)
+entry_custo_forma = tk.Entry(root)
+entry_custo_forma.insert(0, "20")  # Valor default
+entry_custo_forma.grid(row=8, column=5)
+
+# ---------------------------------------------------------------- #
+"""
+
+# Campos ocultos para armazenar os valores de custo
+entry_custo_concreto_25 = tk.Entry(root)
+entry_custo_concreto_25.insert(0, "300")  # Valor default
+entry_custo_concreto_25.grid_remove()  # Ocultar o campo
+
+entry_custo_concreto_6 = tk.Entry(root)
+entry_custo_concreto_6.insert(0, "200")  # Valor default
+entry_custo_concreto_6.grid_remove()  # Ocultar o campo
+
+entry_custo_aco_ca50 = tk.Entry(root)
+entry_custo_aco_ca50.insert(0, "5")  # Valor default
+entry_custo_aco_ca50.grid_remove()  # Ocultar o campo
+
+entry_custo_aterro = tk.Entry(root)
+entry_custo_aterro.insert(0, "50")  # Valor default
+entry_custo_aterro.grid_remove()  # Ocultar o campo
+
+entry_custo_corte = tk.Entry(root)
+entry_custo_corte.insert(0, "50")  # Valor default
+entry_custo_corte.grid_remove()  # Ocultar o campo
+
+entry_custo_carga = tk.Entry(root)
+entry_custo_carga.insert(0, "50")  # Valor default
+entry_custo_carga.grid_remove()  # Ocultar o campo
+
+entry_custo_descarga = tk.Entry(root)
+entry_custo_descarga.insert(0, "50")  # Valor default
+entry_custo_descarga.grid_remove()  # Ocultar o campo
+
+entry_custo_forma = tk.Entry(root)
+entry_custo_forma.insert(0, "20")  # Valor default
+entry_custo_forma.grid_remove()  # Ocultar o campo
+
+
+
+# Criar um frame para o botão e informações de custo
+frame_custos = tk.Frame(root)
+frame_custos.grid(row=0, column=4, columnspan=2, pady=10, padx=10, sticky="nw")
+
+# Título da seção
+tk.Label(frame_custos, text="Custos:", font=("Arial", 14)).pack(pady=5, anchor="w")
+
+# Botão para editar custos
+btn_editar_custos = tk.Button(frame_custos, text="Editar Custos de Materiais", command=editar_custos_popup)
+btn_editar_custos.pack(pady=5)
+
+# Label para mostrar informações resumidas sobre custos
+label_info_custos = tk.Label(frame_custos, text="Clique para editar custos", wraplength=200)
+label_info_custos.pack(pady=5)
+
+# Atualizar as informações de custos ao iniciar
+atualizar_info_custos()
+
+# Novos campos de entrada para os parâmetros de estabilidade
+tk.Label(root, text="Parâmetros de Estabilidade:", font=("Arial", 14)).grid(row=0, column=6, columnspan=2)
+
+tk.Label(root, text="Peso Específico do Concreto (kN/m³):").grid(row=4, column=0)
+entry_gamma_concreto = tk.Entry(root)
+entry_gamma_concreto.insert(0, "24")  # Valor default
+entry_gamma_concreto.grid(row=4, column=1)
+
+tk.Label(root, text="Coeficiente de Empuxo Ativo (K):").grid(row=3, column=6)
+entry_coef_empuxo = tk.Entry(root)
+entry_coef_empuxo.insert(0, "0.35")  # Valor default
+entry_coef_empuxo.grid(row=3, column=7)
+
+
+tk.Label(root, text="Pressão Admissível Fundação (kN/m²):").grid(row=4, column=6)
+entry_pressao_adm = tk.Entry(root)
+entry_pressao_adm.insert(0, "200")  # Valor default
+entry_pressao_adm.grid(row=4, column=7)
+
+# Adicionar campo para base máxima permitida
+tk.Label(root, text="Base Máxima Permitida (m):").grid(row=5, column=0)
+entry_base_max = tk.Entry(root)
+entry_base_max.insert(0, "3.0")  # Valor default
+entry_base_max.grid(row=5, column=1)
+
+
+tk.Label(root, text="Coesão do Solo (kN/m²):").grid(row=5, column=6)
+entry_coesao = tk.Entry(root)
+entry_coesao.insert(0, "100")  # Valor default
+entry_coesao.grid(row=5, column=7)
+
+
+tk.Label(root, text="Ângulo de Atrito (graus):").grid(row=6, column=6)
+entry_phi_estabilidade = tk.Entry(root)
+entry_phi_estabilidade.insert(0, "30")  # Valor default
+entry_phi_estabilidade.grid(row=6, column=7)
+
+
+# Novo campo para fator de segurança de coesão
+# k.Label(root, text="Fator Seg. Coesão:").grid(row=7, column=6)
+entry_fs_coesao = tk.Entry(root)
+entry_fs_coesao.insert(0, "4")  # Valor default
+entry_fs_coesao.grid_remove()  # Ocultar o campo
+# entry_fs_coesao.grid(row=7, column=7)
+
+
+# Novo campo para fator de segurança de atrito
+# tk.Label(root, text="Fator Seg. Atrito:").grid(row=8, column=6)
+entry_fs_atrito = tk.Entry(root)
+entry_fs_atrito.insert(0, "2")  # Valor default
+entry_fs_atrito.grid_remove()  # Ocultar o campo
+# entry_fs_atrito.grid(row=8, column=7)
+
+
+# ---------------------------------------------------------------- #
+# ------------------- Muro de Flexão ----------------------------- #
+# ---------------------------------------------------------------- #
+
+# Botão para calcular
+btn_calcular = tk.Button(root, text="Calcular", command=calcular)
+btn_calcular.grid(row=20, column=0, columnspan=1)
+
+btn_calcular = tk.Button(root, text="Exibir muro de flexão", command=botao_plotar_muro_arrimo)
+btn_calcular.grid(row=20, column=1, columnspan=2)
+
+# Adicione este botão na interface gráfica
+btn_gravidade = tk.Button(root, text="Exibir Muro de Gravidade", 
+                         command=lambda: exibir_muro_gravidade_popup())
+btn_gravidade.grid(row=20, column=4, padx=10, pady=5)
+
+# Botão para exibir muro de contrafortes
+btn_contrafortes = tk.Button(root, text="Exibir Muro de Contrafortes", 
+                         command=lambda: exibir_muro_contrafortes_popup())
+btn_contrafortes.grid(row=20, column=6, padx=10, pady=5)
+
+# Seção Muro de Flexão (colunas 0-2)
+
+# Labels para exibir os quantitativos gerados
+tk.Label(root, text="Quantitativos Gerados:", font=("Arial", 12)).grid(row=9, column=0)
+tk.Label(root, text="Flexão - Quant.:", font=("Arial", 10)).grid(row=9, column=1)
+tk.Label(root, text="Total (R$):", font=("Arial", 12)).grid(row=9, column=2)
+
+# Campos de texto não editáveis para os quantitativos
+tk.Label(root, text="Concreto Estrutural (m³):").grid(row=10, column=0)
+label_concreto_25 = tk.Label(root, text="0.00")  # Valor padrão
+label_concreto_25.grid(row=10, column=1)
+
+label_total_concreto_25 = tk.Label(root, text="0.00")  # Valor padrão
+label_total_concreto_25.grid(row=10, column=2)
+
+tk.Label(root, text="Concreto Massa (m³):").grid(row=11, column=0)
+label_concreto_6 = tk.Label(root, text="0.00")  # Valor padrão
+label_concreto_6.grid(row=11, column=1)
+
+label_total_concreto_6 = tk.Label(root, text="0.00")  # Valor padrão
+label_total_concreto_6.grid(row=11, column=2)
+
+tk.Label(root, text="Aço CA50 (kg):").grid(row=12, column=0)
+label_aco_ca50 = tk.Label(root, text="0.00")  # Valor padrão
+label_aco_ca50.grid(row=12, column=1)
+
+label_total_aco_ca50 = tk.Label(root, text="0.00")  # Valor padrão
+label_total_aco_ca50.grid(row=12, column=2)
+
+tk.Label(root, text="Solo - Aterro (m³):").grid(row=13, column=0)
+label_aterro = tk.Label(root, text="0.00")  # Valor padrão
+label_aterro.grid(row=13, column=1)
+
+label_total_aterro = tk.Label(root, text="0.00")  # Valor padrão
+label_total_aterro.grid(row=13, column=2)
+
+# Labels para os novos custos
+tk.Label(root, text="Solo - Corte (m³):").grid(row=14, column=0)
+label_corte = tk.Label(root, text="0.00")  # Valor padrão
+label_corte.grid(row=14, column=1)
+
+label_total_corte = tk.Label(root, text="0.00")  # Valor padrão
+label_total_corte.grid(row=14, column=2)
+
+tk.Label(root, text="Solo - Carga (m³):").grid(row=15, column=0)
+label_carga = tk.Label(root, text="0.00")  # Valor padrão
+label_carga.grid(row=15, column=1)
+
+label_total_carga = tk.Label(root, text="0.00")  # Valor padrão
+label_total_carga.grid(row=15, column=2)
+
+tk.Label(root, text="Solo - Descarga (m³):").grid(row=16, column=0)
+label_descarga = tk.Label(root, text="0.00")  # Valor padrão
+label_descarga.grid(row=16, column=1)
+
+label_total_descarga = tk.Label(root, text="0.00")  # Valor padrão
+label_total_descarga.grid(row=16, column=2)
+
+tk.Label(root, text="Área de fôrma:").grid(row=17, column=0)
+label_forma = tk.Label(root, text="0.00")  # Valor padrão
+label_forma.grid(row=17, column=1)
+
+label_total_forma = tk.Label(root, text="0.00")  # Valor padrão
+label_total_forma.grid(row=17, column=2)
+
+tk.Label(root, text="Soma (R$):").grid(row=18, column=0)
+label_total_total = tk.Label(root, text="0.00")  # Valor padrão
+label_total_total.grid(row=18, column=2)
+
+tk.Label(root, text="Estável?").grid(row=19, column=0)
+label_estavel_flexao = tk.Label(root, text="Calcular")  # Valor padrão
+label_estavel_flexao.grid(row=19, column=2)
+
+label_estavel_gravidade = tk.Label(root, text="Calcular")  # Valor padrão
+label_estavel_gravidade.grid(row=19, column=4)
+
+label_estavel_contraforte = tk.Label(root, text="Calcular")  # Valor padrão
+label_estavel_contraforte.grid(row=19, column=6)
+
+
+
+
+# ---------------------------------------------------------------- #
+# ------------------ Muro de Gravidade --------------------------- #
+# ---------------------------------------------------------------- #
+
+# Seção Muro de Gravidade (colunas 3-4)
+tk.Label(root, text="Gravidade - Quant.:", font=("Arial", 10)).grid(row=9, column=3)
+
+# Cabeçalhos
+tk.Label(root, text="Total (R$):", font=("Arial", 12)).grid(row=9, column=4)
+
+# Campos de texto não editáveis para os quantitativos
+label_concreto_25_grav = tk.Label(root, text="0.00")  # Valor padrão
+label_concreto_25_grav.grid(row=10, column=3)
+
+label_total_concreto_25_grav = tk.Label(root, text="0.00")  # Valor padrão
+label_total_concreto_25_grav.grid(row=10, column=4)
+
+label_concreto_6_grav = tk.Label(root, text="0.00")  # Valor padrão
+label_concreto_6_grav.grid(row=11, column=3)
+
+label_total_concreto_6_grav = tk.Label(root, text="0.00")  # Valor padrão
+label_total_concreto_6_grav.grid(row=11, column=4)
+
+label_aco_ca50_grav = tk.Label(root, text="0.00")  # Valor padrão
+label_aco_ca50_grav.grid(row=12, column=3)
+
+label_total_aco_ca50_grav = tk.Label(root, text="0.00")  # Valor padrão
+label_total_aco_ca50_grav.grid(row=12, column=4)
+
+
+label_aterro_grav = tk.Label(root, text="0.00")  # Valor padrão
+label_aterro_grav.grid(row=13, column=3)
+
+label_total_aterro_grav = tk.Label(root, text="0.00")  # Valor padrão
+label_total_aterro_grav.grid(row=13, column=4)
+
+label_corte_grav = tk.Label(root, text="0.00")  # Valor padrão
+label_corte_grav.grid(row=14, column=3)
+
+label_total_corte_grav = tk.Label(root, text="0.00")  # Valor padrão
+label_total_corte_grav.grid(row=14, column=4)
+
+label_carga_grav = tk.Label(root, text="0.00")  # Valor padrão
+label_carga_grav.grid(row=15, column=3)
+
+label_total_carga_grav = tk.Label(root, text="0.00")  # Valor padrão
+label_total_carga_grav.grid(row=15, column=4)
+
+label_descarga_grav = tk.Label(root, text="0.00")  # Valor padrão
+label_descarga_grav.grid(row=16, column=3)
+
+label_total_descarga_grav = tk.Label(root, text="0.00")  # Valor padrão
+label_total_descarga_grav.grid(row=16, column=4)
+
+label_forma_grav = tk.Label(root, text="0.00")  # Valor padrão
+label_forma_grav.grid(row=17, column=3)
+
+label_total_forma_grav = tk.Label(root, text="0.00")  # Valor padrão
+label_total_forma_grav.grid(row=17, column=4)
+
+label_total_total_grav = tk.Label(root, text="0.00")  # Valor padrão
+label_total_total_grav.grid(row=18, column=4)
+
+# ---------------------------------------------------------------- #
+# ------------------ Muro de Contrafortes ------------------------ #
+# ---------------------------------------------------------------- #
+
+# Seção Muro de Contrafortes (colunas 5-6)
+tk.Label(root, text="Contrafortes - Quant.:", font=("Arial", 10)).grid(row=9, column=5)
+
+# Cabeçalhos
+tk.Label(root, text="Total (R$):", font=("Arial", 12)).grid(row=9, column=6)
+
+# Seção Muro de Gravidade (colunas 3-4)
+tk.Label(root, text="Gravidade - Quant.:", font=("Arial", 10)).grid(row=9, column=3)
+
+# Cabeçalhos
+tk.Label(root, text="Total (R$):", font=("Arial", 14)).grid(row=9, column=4)
+
+# Campos de texto não editáveis para os quantitativos
+label_concreto_25_contraforte = tk.Label(root, text="0.00")  # Valor padrão
+label_concreto_25_contraforte.grid(row=10, column=5)
+
+label_total_concreto_25_contraforte = tk.Label(root, text="0.00")  # Valor padrão
+label_total_concreto_25_contraforte.grid(row=10, column=6)
+
+label_concreto_6_contraforte = tk.Label(root, text="0.00")  # Valor padrão
+label_concreto_6_contraforte.grid(row=11, column=5)
+
+label_total_concreto_6_contraforte = tk.Label(root, text="0.00")  # Valor padrão
+label_total_concreto_6_contraforte.grid(row=11, column=6)
+
+label_aco_ca50_contraforte = tk.Label(root, text="0.00")  # Valor padrão
+label_aco_ca50_contraforte.grid(row=12, column=5)
+
+label_total_aco_ca50_contraforte = tk.Label(root, text="0.00")  # Valor padrão
+label_total_aco_ca50_contraforte.grid(row=12, column=6)
+
+
+label_aterro_contraforte = tk.Label(root, text="0.00")  # Valor padrão
+label_aterro_contraforte.grid(row=13, column=5)
+
+label_total_aterro_contraforte = tk.Label(root, text="0.00")  # Valor padrão
+label_total_aterro_contraforte.grid(row=13, column=6)
+
+label_corte_contraforte = tk.Label(root, text="0.00")  # Valor padrão
+label_corte_contraforte.grid(row=14, column=5)
+
+label_total_corte_contraforte = tk.Label(root, text="0.00")  # Valor padrão
+label_total_corte_contraforte.grid(row=14, column=6)
+
+label_carga_contraforte = tk.Label(root, text="0.00")  # Valor padrão
+label_carga_contraforte.grid(row=15, column=5)
+
+label_total_carga_contraforte = tk.Label(root, text="0.00")  # Valor padrão
+label_total_carga_contraforte.grid(row=15, column=6)
+
+label_descarga_contraforte = tk.Label(root, text="0.00")  # Valor padrão
+label_descarga_contraforte.grid(row=16, column=5)
+
+label_total_descarga_contraforte = tk.Label(root, text="0.00")  # Valor padrão
+label_total_descarga_contraforte.grid(row=16, column=6)
+
+label_forma_contraforte = tk.Label(root, text="0.00")  # Valor padrão
+label_forma_contraforte.grid(row=17, column=5)
+
+label_total_forma_contraforte = tk.Label(root, text="0.00")  # Valor padrão
+label_total_forma_contraforte.grid(row=17, column=6)
+
+label_total_total_contraforte = tk.Label(root, text="0.00")  # Valor padrão
+label_total_total_contraforte.grid(row=18, column=6)
+
+# Iniciar a interface
+root.mainloop()
+
+
+
+
+
+
+
+# Essa função está obsoleta. 
+def verificar_estabilidade_global_flexao(h, b_mont, b_jus, beta, phi, gamma_solo, delta, gamma_conc):
+    """
+    Verifica a estabilidade global do muro de arrimo quanto ao deslizamento, tombamento e capacidade de carga
+    
+    Parâmetros:
+    h: altura do muro (m)
+    b_mont: largura da base a montante (m) 
+    b_jus: largura da base a jusante (m)
+    beta: ângulo de inclinação do terreno (graus)
+    phi: ângulo de atrito interno do solo (graus)
+    gamma_solo: peso específico do solo (kN/m³)
+    delta: ângulo de atrito solo-muro (graus)
+    gamma_conc: peso específico do concreto (kN/m³)
+    
+    Retorna:
+    dict com fatores de segurança calculados
+    """
+    # Calcula empuxos
+    ea_total, ea_h, ea_v = calcular_empuxo_inclinado(h, beta, phi, gamma_solo, delta)
+                # Utiliza a fórmula do empuxo inclinado para cálculos de estabilidade
+    
+    # Calcula peso de terra sobre base montante
+    peso_terra, x_cg, volume_aterro, volume_corte = calcular_peso_terra_montante(h, b_mont, gamma_solo, beta)
+    
+    # Peso próprio do muro
+    base_total = b_mont + b_jus                 # A base total é a montante + jusante
+    peso_muro = h * base_total * gamma_conc     # Peso do muro para um muro retangular
+    
+    # Força normal total
+    normal = peso_muro + peso_terra + ea_v
+    
+    # Verificação ao deslizamento
+    forca_resistente = normal * math.tan(math.radians(phi))
+    fs_deslizamento = forca_resistente / ea_h
+    
+    # Verificação ao tombamento
+    momento_estabilizante = (peso_muro * base_total/2 + 
+                           peso_terra * (b_jus + b_mont/2) +
+                           ea_v * b_jus)
+    momento_tombamento = ea_h * h/3
+    fs_tombamento = momento_estabilizante / momento_tombamento
+    
+    # Verificação da tensão na base
+    excentricidade = (momento_estabilizante - momento_tombamento) / normal
+    excentricidade_ok = abs(excentricidade) <= base_total / 6
+    tensao_max = normal/base_total * (1 + 6*excentricidade/base_total)
+    tensao_min = normal/base_total * (1 - 6*excentricidade/base_total)
+    
+    return {
+        'fs_deslizamento': fs_deslizamento,
+        'fs_tombamento': fs_tombamento,
+        'tensao_max': tensao_max,
+        'tensao_min': tensao_min,
+        'estavel': fs_deslizamento >= 1.5 and fs_tombamento >= 2.0 and tensao_min > 0,
+        'excentricidade_ok': excentricidade_ok
+    }
+
+
+def mostrar_avisos_iniciais():
+    # Criar uma janela popup
+    janela_avisos = tk.Toplevel()
+    janela_avisos.title("Avisos Importantes")
+    janela_avisos.geometry("500x400")
+    janela_avisos.resizable(False, False)
+    janela_avisos.transient(root)  # Define como modal
+    janela_avisos.grab_set()       # Impede interação com a janela principal
+    
+    # Cabeçalho
+    tk.Label(janela_avisos, text="Avisos Importantes", font=("Arial", 14, "bold")).pack(pady=10)
+    
+    # Área de texto com barra de rolagem
+    frame_texto = tk.Frame(janela_avisos)
+    frame_texto.pack(fill="both", expand=True, padx=20, pady=10)
+    
+    scrollbar = tk.Scrollbar(frame_texto)
+    scrollbar.pack(side="right", fill="y")
+    
+    texto_avisos = tk.Text(frame_texto, wrap="word", yscrollcommand=scrollbar.set)
+    texto_avisos.pack(side="left", fill="both", expand=True)
+    scrollbar.config(command=texto_avisos.yview)
+    
+    # Conteúdo dos avisos
+    avisos = """
+    Bem-vindo ao Programa de Dimensionamento de Muros!
+    
+    AVISOS IMPORTANTES:
+    
+    1. Este programa é uma ferramenta de auxílio ao pré-dimensionamento e não substitui o julgamento profissional de um engenheiro qualificado.
+    
+    2. Os cálculos são baseados em métodos simplificados e podem não considerar todas as variáveis presentes em um projeto real.
+    
+    3. A responsabilidade pela verificação dos resultados e sua aplicação em projetos reais é inteiramente do usuário.
+    
+    4. Recomenda-se a validação dos resultados através de métodos alternativos e/ou consultoria especializada.
+    
+    5. O programa não considera análises sísmicas, condições especiais do solo ou outros fatores específicos que podem ser críticos em determinadas situações.
+    
+    Ao continuar, você confirma que leu e compreendeu estes avisos.
+    """
+    
+    texto_avisos.insert("1.0", avisos)
+    texto_avisos.config(state="disabled")  # Torna o texto não editável
+    
+    # Botão de confirmação
+    def fechar_aviso():
+        janela_avisos.destroy()
+    
+    tk.Button(janela_avisos, text="Concordo e Desejo Continuar", command=fechar_aviso, 
+              font=("Arial", 10, "bold")).pack(pady=15)
+    
+    # Esperar até que a janela seja fechada
+    root.wait_window(janela_avisos)
+
+def editar_custos_popup():
+    """
+    Exibe um popup para edição dos custos dos materiais
+    """
+    # Criar uma nova janela
+    janela_custos = tk.Toplevel()
+    janela_custos.title("Edição de Custos de Materiais")
+    janela_custos.geometry("450x450")
+    janela_custos.resizable(False, False)
+    janela_custos.transient(root)  # Define como modal
+    janela_custos.grab_set()       # Impede interação com a janela principal
+    
+    # Variáveis para armazenar os valores atuais
+    valor_concreto_25 = tk.StringVar(value=entry_custo_concreto_25.get())
+    valor_concreto_6 = tk.StringVar(value=entry_custo_concreto_6.get())
+    valor_aco_ca50 = tk.StringVar(value=entry_custo_aco_ca50.get())
+    valor_aterro = tk.StringVar(value=entry_custo_aterro.get())
+    valor_corte = tk.StringVar(value=entry_custo_corte.get())
+    valor_carga = tk.StringVar(value=entry_custo_carga.get())
+    valor_descarga = tk.StringVar(value=entry_custo_descarga.get())
+    valor_forma = tk.StringVar(value=entry_custo_forma.get())
+    
+    # Cabeçalho
+    tk.Label(janela_custos, text="Edição de Custos", font=("Arial", 14, "bold")).grid(row=0, column=0, columnspan=2, pady=10)
+    
+    # Criar os campos de entrada
+    tk.Label(janela_custos, text="Custo Concreto Estrutural (R$/m³):").grid(row=1, column=0, sticky="w", padx=10, pady=5)
+    entry_concreto_25 = tk.Entry(janela_custos, textvariable=valor_concreto_25)
+    entry_concreto_25.grid(row=1, column=1, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Custo Concreto Massa (R$/m³):").grid(row=2, column=0, sticky="w", padx=10, pady=5)
+    entry_concreto_6 = tk.Entry(janela_custos, textvariable=valor_concreto_6)
+    entry_concreto_6.grid(row=2, column=1, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Custo Aço CA50 (R$/kg):").grid(row=3, column=0, sticky="w", padx=10, pady=5)
+    entry_aco_ca50 = tk.Entry(janela_custos, textvariable=valor_aco_ca50)
+    entry_aco_ca50.grid(row=3, column=1, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Custo Solo - Aterro (R$/m³):").grid(row=4, column=0, sticky="w", padx=10, pady=5)
+    entry_aterro = tk.Entry(janela_custos, textvariable=valor_aterro)
+    entry_aterro.grid(row=4, column=1, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Custo Solo - Corte (R$/m³):").grid(row=5, column=0, sticky="w", padx=10, pady=5)
+    entry_corte = tk.Entry(janela_custos, textvariable=valor_corte)
+    entry_corte.grid(row=5, column=1, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Custo Solo - Carga (R$/m³):").grid(row=6, column=0, sticky="w", padx=10, pady=5)
+    entry_carga = tk.Entry(janela_custos, textvariable=valor_carga)
+    entry_carga.grid(row=6, column=1, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Custo Solo - Descarga (R$/m³):").grid(row=7, column=0, sticky="w", padx=10, pady=5)
+    entry_descarga = tk.Entry(janela_custos, textvariable=valor_descarga)
+    entry_descarga.grid(row=7, column=1, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Custo Forma (R$/m²):").grid(row=8, column=0, sticky="w", padx=10, pady=5)
+    entry_forma = tk.Entry(janela_custos, textvariable=valor_forma)
+    entry_forma.grid(row=8, column=1, padx=10, pady=5)
+    
+    # Função para aplicar as alterações
+    def aplicar_custos():
+        try:
+            # Validar os valores
+            custos = [
+                float(valor_concreto_25.get()),
+                float(valor_concreto_6.get()),
+                float(valor_aco_ca50.get()),
+                float(valor_aterro.get()),
+                float(valor_corte.get()),
+                float(valor_carga.get()),
+                float(valor_descarga.get()),
+                float(valor_forma.get())
+            ]
+            
+            # Verificar se os valores são positivos
+            if any(custo < 0 for custo in custos):
+                messagebox.showerror("Erro", "Os custos devem ser valores positivos.")
+                return
+                
+            # Atualizar os valores nos campos da interface principal
+            entry_custo_concreto_25.delete(0, tk.END)
+            entry_custo_concreto_25.insert(0, valor_concreto_25.get())
+            
+            entry_custo_concreto_6.delete(0, tk.END)
+            entry_custo_concreto_6.insert(0, valor_concreto_6.get())
+            
+            entry_custo_aco_ca50.delete(0, tk.END)
+            entry_custo_aco_ca50.insert(0, valor_aco_ca50.get())
+            
+            entry_custo_aterro.delete(0, tk.END)
+            entry_custo_aterro.insert(0, valor_aterro.get())
+            
+            entry_custo_corte.delete(0, tk.END)
+            entry_custo_corte.insert(0, valor_corte.get())
+            
+            entry_custo_carga.delete(0, tk.END)
+            entry_custo_carga.insert(0, valor_carga.get())
+            
+            entry_custo_descarga.delete(0, tk.END)
+            entry_custo_descarga.insert(0, valor_descarga.get())
+            
+            entry_custo_forma.delete(0, tk.END)
+            entry_custo_forma.insert(0, valor_forma.get())
+            
+            # Atualizar o rótulo do botão de custos com o valor total
+            atualizar_info_custos()
+            
+            # Fechar a janela
+            janela_custos.destroy()
+            
+            # Se já existem cálculos, atualizar os resultados
+            try:
+                calcular()
+            except:
+                pass
+                
+        except ValueError:
+            messagebox.showerror("Erro", "Por favor, insira apenas valores numéricos válidos.")
+    
+    # Botões
+    frame_botoes = tk.Frame(janela_custos)
+    frame_botoes.grid(row=9, column=0, columnspan=2, pady=20)
+    
+    btn_aplicar = tk.Button(frame_botoes, text="Aplicar", command=aplicar_custos)
+    btn_aplicar.pack(side="left", padx=10)
+    
+    btn_cancelar = tk.Button(frame_botoes, text="Cancelar", command=janela_custos.destroy)
+    btn_cancelar.pack(side="left", padx=10)
+    
+    # Informações adicionais
+    info_texto = (
+        "Os custos definidos aqui serão utilizados para calcular\n"
+        "o orçamento das diferentes soluções de muro.\n"
+        "Certifique-se de utilizar valores atualizados de mercado."
+    )
+    
+    info_label = tk.Label(janela_custos, text=info_texto, justify="left", wraplength=400)
+    info_label.grid(row=10, column=0, columnspan=2, padx=10, pady=10)
+    
+    # Centralizar a janela
+    janela_custos.update_idletasks()
+    width = janela_custos.winfo_width()
+    height = janela_custos.winfo_height()
+    x = (janela_custos.winfo_screenwidth() // 2) - (width // 2)
+    y = (janela_custos.winfo_screenheight() // 2) - (height // 2)
+    janela_custos.geometry('{}x{}+{}+{}'.format(width, height, x, y))
+    
+    # Iniciar loop da janela
+    janela_custos.mainloop()
+
+def atualizar_info_custos():
+    """
+    Atualiza o rótulo do botão de custos com informações resumidas
+    """
+    try:
+        conc_25 = float(entry_custo_concreto_25.get())
+        conc_6 = float(entry_custo_concreto_6.get())
+        aco = float(entry_custo_aco_ca50.get())
+        
+        texto = f"Concreto: R${conc_25:.2f}/m³ | Aço: R${aco:.2f}/kg"
+        label_info_custos.config(text=texto)
+    except:
+        label_info_custos.config(text="Clique para editar custos")
+
+"""
+# Campos de entrada para os parâmetros de estabilidade
+tk.Label(root, text="Custos:", font=("Arial", 14)).grid(row=0, column=4, columnspan=2)
+
+# Campos de custo
+tk.Label(root, text="Custo Concreto Estrutural (R$/m³):").grid(row=1, column=4)
+entry_custo_concreto_25 = tk.Entry(root)
+entry_custo_concreto_25.insert(0, "300")  # Valor default
+entry_custo_concreto_25.grid(row=1, column=5)
+
+
+tk.Label(root, text="Custo Concreto Massa (R$/m³):").grid(row=2, column=4)
+entry_custo_concreto_6 = tk.Entry(root)
+entry_custo_concreto_6.insert(0, "200")  # Valor default
+entry_custo_concreto_6.grid(row=2, column=5)
+
+
+tk.Label(root, text="Custo Aço CA50 (R$/kg):").grid(row=3, column=4)
+entry_custo_aco_ca50 = tk.Entry(root)
+entry_custo_aco_ca50.insert(0, "5")  # Valor default
+entry_custo_aco_ca50.grid(row=3, column=5)
+
+
+tk.Label(root, text="Custo Solo - Aterro (R$/m³):").grid(row=4, column=4)
+entry_custo_aterro = tk.Entry(root)
+entry_custo_aterro.insert(0, "50")  # Valor default
+entry_custo_aterro.grid(row=4, column=5)
+
+
+tk.Label(root, text="Custo Solo - Corte (R$/m³):").grid(row=5, column=4)
+entry_custo_corte = tk.Entry(root)
+entry_custo_corte.insert(0, "50")  # Valor default
+entry_custo_corte.grid(row=5, column=5)
+
+
+tk.Label(root, text="Custo Solo - Carga (R$/m³):").grid(row=6, column=4)
+entry_custo_carga = tk.Entry(root)
+entry_custo_carga.insert(0, "50")  # Valor default
+entry_custo_carga.grid(row=6, column=5)
+
+
+tk.Label(root, text="Custo Solo - Descarga (R$/m³):").grid(row=7, column=4)
+entry_custo_descarga = tk.Entry(root)
+entry_custo_descarga.insert(0, "50")  # Valor default
+entry_custo_descarga.grid(row=7, column=5)
+
+
+tk.Label(root, text="Custo Forma (R$/m²):").grid(row=8, column=4)
+entry_custo_forma = tk.Entry(root)
+entry_custo_forma.insert(0, "20")  # Valor default
+entry_custo_forma.grid(row=8, column=5)
+
+"""
+# E substitua por:
+# Campos ocultos para armazenar os valores de custo
+entry_custo_concreto_25 = tk.Entry(root)
+entry_custo_concreto_25.insert(0, "300")  # Valor default
+entry_custo_concreto_25.grid_remove()  # Ocultar o campo
+
+entry_custo_concreto_6 = tk.Entry(root)
+entry_custo_concreto_6.insert(0, "200")  # Valor default
+entry_custo_concreto_6.grid_remove()  # Ocultar o campo
+
+entry_custo_aco_ca50 = tk.Entry(root)
+entry_custo_aco_ca50.insert(0, "5")  # Valor default
+entry_custo_aco_ca50.grid_remove()  # Ocultar o campo
+
+entry_custo_aterro = tk.Entry(root)
+entry_custo_aterro.insert(0, "50")  # Valor default
+entry_custo_aterro.grid_remove()  # Ocultar o campo
+
+entry_custo_corte = tk.Entry(root)
+entry_custo_corte.insert(0, "50")  # Valor default
+entry_custo_corte.grid_remove()  # Ocultar o campo
+
+entry_custo_carga = tk.Entry(root)
+entry_custo_carga.insert(0, "50")  # Valor default
+entry_custo_carga.grid_remove()  # Ocultar o campo
+
+entry_custo_descarga = tk.Entry(root)
+entry_custo_descarga.insert(0, "50")  # Valor default
+entry_custo_descarga.grid_remove()  # Ocultar o campo
+
+entry_custo_forma = tk.Entry(root)
+entry_custo_forma.insert(0, "20")  # Valor default
+entry_custo_forma.grid_remove()  # Ocultar o campo
+
+# Criar um frame para o botão e informações de custo
+frame_custos = tk.Frame(root)
+frame_custos.grid(row=0, column=4, columnspan=2, pady=10, padx=10, sticky="nw")
+
+# Título da seção
+tk.Label(frame_custos, text="Custos:", font=("Arial", 14)).pack(pady=5, anchor="w")
+
+# Botão para editar custos
+btn_editar_custos = tk.Button(frame_custos, text="Editar Custos de Materiais", command=editar_custos_popup)
+btn_editar_custos.pack(pady=5)
+
+# Label para mostrar informações resumidas sobre custos
+label_info_custos = tk.Label(frame_custos, text="Clique para editar custos", wraplength=200)
+label_info_custos.pack(pady=5)
+
+# Atualizar as informações de custos ao iniciar
+atualizar_info_custos()
+
+
+## 3. Como funciona
+"""
+- Os campos de custo não ficarão mais visíveis diretamente na tela principal
+- Um botão "Editar Custos de Materiais" será mostrado no lugar
+- Clicando no botão, uma janela popup será aberta com todos os campos de custo
+- Ao editar os valores e clicar em "Aplicar", os custos serão atualizados
+- Os valores atuais de custo serão resumidos em uma linha abaixo do botão
+
+Esta implementação deixa a interface principal mais limpa e organizada, focando nos parâmetros principais. Os custos, que são ajustados com menos frequência, ficam em uma tela dedicada para edição. 
+"""
+
+def editar_custos_popup():
+    """
+    Exibe um popup para edição dos custos dos materiais
+    """
+    # Criar uma nova janela
+    janela_custos = tk.Toplevel()
+    janela_custos.title("Edição de Custos de Materiais")
+    janela_custos.geometry("450x450")
+    janela_custos.resizable(False, False)
+    janela_custos.transient(root)  # Define como modal
+    janela_custos.grab_set()       # Impede interação com a janela principal
+    
+    # Variáveis para armazenar os valores atuais
+    valor_concreto_25 = tk.StringVar(value=entry_custo_concreto_25.get())
+    valor_concreto_6 = tk.StringVar(value=entry_custo_concreto_6.get())
+    valor_aco_ca50 = tk.StringVar(value=entry_custo_aco_ca50.get())
+    valor_aterro = tk.StringVar(value=entry_custo_aterro.get())
+    valor_corte = tk.StringVar(value=entry_custo_corte.get())
+    valor_carga = tk.StringVar(value=entry_custo_carga.get())
+    valor_descarga = tk.StringVar(value=entry_custo_descarga.get())
+    valor_forma = tk.StringVar(value=entry_custo_forma.get())
+    
+    # Cabeçalho
+    tk.Label(janela_custos, text="Edição de Custos", font=("Arial", 14, "bold")).grid(row=0, column=0, columnspan=2, pady=10)
+    
+    # Criar os campos de entrada
+    tk.Label(janela_custos, text="Custo Concreto Estrutural (R$/m³):").grid(row=1, column=0, sticky="w", padx=10, pady=5)
+    entry_concreto_25 = tk.Entry(janela_custos, textvariable=valor_concreto_25)
+    entry_concreto_25.grid(row=1, column=1, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Custo Concreto Massa (R$/m³):").grid(row=2, column=0, sticky="w", padx=10, pady=5)
+    entry_concreto_6 = tk.Entry(janela_custos, textvariable=valor_concreto_6)
+    entry_concreto_6.grid(row=2, column=1, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Custo Aço CA50 (R$/kg):").grid(row=3, column=0, sticky="w", padx=10, pady=5)
+    entry_aco_ca50 = tk.Entry(janela_custos, textvariable=valor_aco_ca50)
+    entry_aco_ca50.grid(row=3, column=1, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Custo Solo - Aterro (R$/m³):").grid(row=4, column=0, sticky="w", padx=10, pady=5)
+    entry_aterro = tk.Entry(janela_custos, textvariable=valor_aterro)
+    entry_aterro.grid(row=4, column=1, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Custo Solo - Corte (R$/m³):").grid(row=5, column=0, sticky="w", padx=10, pady=5)
+    entry_corte = tk.Entry(janela_custos, textvariable=valor_corte)
+    entry_corte.grid(row=5, column=1, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Custo Solo - Carga (R$/m³):").grid(row=6, column=0, sticky="w", padx=10, pady=5)
+    entry_carga = tk.Entry(janela_custos, textvariable=valor_carga)
+    entry_carga.grid(row=6, column=1, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Custo Solo - Descarga (R$/m³):").grid(row=7, column=0, sticky="w", padx=10, pady=5)
+    entry_descarga = tk.Entry(janela_custos, textvariable=valor_descarga)
+    entry_descarga.grid(row=7, column=1, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Custo Forma (R$/m²):").grid(row=8, column=0, sticky="w", padx=10, pady=5)
+    entry_forma = tk.Entry(janela_custos, textvariable=valor_forma)
+    entry_forma.grid(row=8, column=1, padx=10, pady=5)
+    
+    # Função para aplicar as alterações
+    def aplicar_custos():
+        try:
+            # Validar os valores
+            custos = [
+                float(valor_concreto_25.get()),
+                float(valor_concreto_6.get()),
+                float(valor_aco_ca50.get()),
+                float(valor_aterro.get()),
+                float(valor_corte.get()),
+                float(valor_carga.get()),
+                float(valor_descarga.get()),
+                float(valor_forma.get())
+            ]
+            
+            # Verificar se os valores são positivos
+            if any(custo < 0 for custo in custos):
+                messagebox.showerror("Erro", "Os custos devem ser valores positivos.")
+                return
+                
+            # Atualizar os valores nos campos da interface principal
+            entry_custo_concreto_25.delete(0, tk.END)
+            entry_custo_concreto_25.insert(0, valor_concreto_25.get())
+            
+            entry_custo_concreto_6.delete(0, tk.END)
+            entry_custo_concreto_6.insert(0, valor_concreto_6.get())
+            
+            entry_custo_aco_ca50.delete(0, tk.END)
+            entry_custo_aco_ca50.insert(0, valor_aco_ca50.get())
+            
+            entry_custo_aterro.delete(0, tk.END)
+            entry_custo_aterro.insert(0, valor_aterro.get())
+            
+            entry_custo_corte.delete(0, tk.END)
+            entry_custo_corte.insert(0, valor_corte.get())
+            
+            entry_custo_carga.delete(0, tk.END)
+            entry_custo_carga.insert(0, valor_carga.get())
+            
+            entry_custo_descarga.delete(0, tk.END)
+            entry_custo_descarga.insert(0, valor_descarga.get())
+            
+            entry_custo_forma.delete(0, tk.END)
+            entry_custo_forma.insert(0, valor_forma.get())
+            
+            # Atualizar o rótulo do botão de custos com o valor total
+            atualizar_info_custos()
+            
+            # Fechar a janela
+            janela_custos.destroy()
+            
+            # Se já existem cálculos, atualizar os resultados
+            try:
+                calcular()
+            except:
+                pass
+                
+        except ValueError:
+            messagebox.showerror("Erro", "Por favor, insira apenas valores numéricos válidos.")
+    
+    # Botões
+    frame_botoes = tk.Frame(janela_custos)
+    frame_botoes.grid(row=9, column=0, columnspan=2, pady=20)
+    
+    btn_aplicar = tk.Button(frame_botoes, text="Aplicar", command=aplicar_custos)
+    btn_aplicar.pack(side="left", padx=10)
+    
+    btn_cancelar = tk.Button(frame_botoes, text="Cancelar", command=janela_custos.destroy)
+    btn_cancelar.pack(side="left", padx=10)
+    
+    # Informações adicionais
+    info_texto = (
+        "Os custos definidos aqui serão utilizados para calcular\n"
+        "o orçamento das diferentes soluções de muro.\n"
+        "Certifique-se de utilizar valores atualizados de mercado."
+    )
+    
+    info_label = tk.Label(janela_custos, text=info_texto, justify="left", wraplength=400)
+    info_label.grid(row=10, column=0, columnspan=2, padx=10, pady=10)
+    
+    # Centralizar a janela
+    janela_custos.update_idletasks()
+    width = janela_custos.winfo_width()
+    height = janela_custos.winfo_height()
+    x = (janela_custos.winfo_screenwidth() // 2) - (width // 2)
+    y = (janela_custos.winfo_screenheight() // 2) - (height // 2)
+    janela_custos.geometry('{}x{}+{}+{}'.format(width, height, x, y))
+    
+    # Iniciar loop da janela
+    janela_custos.mainloop()
+
+def atualizar_info_custos():
+    """
+    Atualiza o rótulo do botão de custos com informações resumidas
+    """
+    try:
+        conc_25 = float(entry_custo_concreto_25.get())
+        conc_6 = float(entry_custo_concreto_6.get())
+        aco = float(entry_custo_aco_ca50.get())
+        
+        texto = f"Concreto: R${conc_25:.2f}/m³ | Aço: R${aco:.2f}/kg"
+        label_info_custos.config(text=texto)
+    except:
+        label_info_custos.config(text="Clique para editar custos")
+
+def editar_custos_popup():
+    """
+    Exibe um popup para edição dos custos dos materiais
+    """
+    # Criar uma nova janela
+    janela_custos = tk.Toplevel()
+    janela_custos.title("Edição de Custos de Materiais")
+    janela_custos.geometry("450x450")
+    janela_custos.resizable(False, False)
+    janela_custos.transient(root)  # Define como modal
+    janela_custos.grab_set()       # Impede interação com a janela principal
+    
+    # Variáveis para armazenar os valores atuais
+    valor_concreto_25 = tk.StringVar(value=entry_custo_concreto_25.get())
+    valor_concreto_6 = tk.StringVar(value=entry_custo_concreto_6.get())
+    valor_aco_ca50 = tk.StringVar(value=entry_custo_aco_ca50.get())
+    valor_aterro = tk.StringVar(value=entry_custo_aterro.get())
+    valor_corte = tk.StringVar(value=entry_custo_corte.get())
+    valor_carga = tk.StringVar(value=entry_custo_carga.get())
+    valor_descarga = tk.StringVar(value=entry_custo_descarga.get())
+    valor_forma = tk.StringVar(value=entry_custo_forma.get())
+    
+    # Cabeçalho
+    tk.Label(janela_custos, text="Edição de Custos", font=("Arial", 14, "bold")).grid(row=0, column=0, columnspan=2, pady=10)
+    
+    # Criar os campos de entrada
+    tk.Label(janela_custos, text="Custo Concreto Estrutural (R$/m³):").grid(row=1, column=0, sticky="w", padx=10, pady=5)
+    entry_concreto_25 = tk.Entry(janela_custos, textvariable=valor_concreto_25)
+    entry_concreto_25.grid(row=1, column=1, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Custo Concreto Massa (R$/m³):").grid(row=2, column=0, sticky="w", padx=10, pady=5)
+    entry_concreto_6 = tk.Entry(janela_custos, textvariable=valor_concreto_6)
+    entry_concreto_6.grid(row=2, column=1, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Custo Aço CA50 (R$/kg):").grid(row=3, column=0, sticky="w", padx=10, pady=5)
+    entry_aco_ca50 = tk.Entry(janela_custos, textvariable=valor_aco_ca50)
+    entry_aco_ca50.grid(row=3, column=1, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Custo Solo - Aterro (R$/m³):").grid(row=4, column=0, sticky="w", padx=10, pady=5)
+    entry_aterro = tk.Entry(janela_custos, textvariable=valor_aterro)
+    entry_aterro.grid(row=4, column=1, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Custo Solo - Corte (R$/m³):").grid(row=5, column=0, sticky="w", padx=10, pady=5)
+    entry_corte = tk.Entry(janela_custos, textvariable=valor_corte)
+    entry_corte.grid(row=5, column=1, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Custo Solo - Carga (R$/m³):").grid(row=6, column=0, sticky="w", padx=10, pady=5)
+    entry_carga = tk.Entry(janela_custos, textvariable=valor_carga)
+    entry_carga.grid(row=6, column=1, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Custo Solo - Descarga (R$/m³):").grid(row=7, column=0, sticky="w", padx=10, pady=5)
+    entry_descarga = tk.Entry(janela_custos, textvariable=valor_descarga)
+    entry_descarga.grid(row=7, column=1, padx=10, pady=5)
+    
+    tk.Label(janela_custos, text="Custo Forma (R$/m²):").grid(row=8, column=0, sticky="w", padx=10, pady=5)
+    entry_forma = tk.Entry(janela_custos, textvariable=valor_forma)
+    entry_forma.grid(row=8, column=1, padx=10, pady=5)
+    
+    # Função para aplicar as alterações
+    def aplicar_custos():
+        try:
+            # Validar os valores
+            custos = [
+                float(valor_concreto_25.get()),
+                float(valor_concreto_6.get()),
+                float(valor_aco_ca50.get()),
+                float(valor_aterro.get()),
+                float(valor_corte.get()),
+                float(valor_carga.get()),
+                float(valor_descarga.get()),
+                float(valor_forma.get())
+            ]
+            
+            # Verificar se os valores são positivos
+            if any(custo < 0 for custo in custos):
+                messagebox.showerror("Erro", "Os custos devem ser valores positivos.")
+                return
+                
+            # Atualizar os valores nos campos da interface principal
+            entry_custo_concreto_25.delete(0, tk.END)
+            entry_custo_concreto_25.insert(0, valor_concreto_25.get())
+            
+            entry_custo_concreto_6.delete(0, tk.END)
+            entry_custo_concreto_6.insert(0, valor_concreto_6.get())
+            
+            entry_custo_aco_ca50.delete(0, tk.END)
+            entry_custo_aco_ca50.insert(0, valor_aco_ca50.get())
+            
+            entry_custo_aterro.delete(0, tk.END)
+            entry_custo_aterro.insert(0, valor_aterro.get())
+            
+            entry_custo_corte.delete(0, tk.END)
+            entry_custo_corte.insert(0, valor_corte.get())
+            
+            entry_custo_carga.delete(0, tk.END)
+            entry_custo_carga.insert(0, valor_carga.get())
+            
+            entry_custo_descarga.delete(0, tk.END)
+            entry_custo_descarga.insert(0, valor_descarga.get())
+            
+            entry_custo_forma.delete(0, tk.END)
+            entry_custo_forma.insert(0, valor_forma.get())
+            
+            # Atualizar o rótulo do botão de custos com o valor total
+            atualizar_info_custos()
+            
+            # Fechar a janela
+            janela_custos.destroy()
+            
+            # Se já existem cálculos, atualizar os resultados
+            try:
+                calcular()
+            except:
+                pass
+                
+        except ValueError:
+            messagebox.showerror("Erro", "Por favor, insira apenas valores numéricos válidos.")
+    
+    # Botões
+    frame_botoes = tk.Frame(janela_custos)
+    frame_botoes.grid(row=9, column=0, columnspan=2, pady=20)
+    
+    btn_aplicar = tk.Button(frame_botoes, text="Aplicar", command=aplicar_custos)
+    btn_aplicar.pack(side="left", padx=10)
+    
+    btn_cancelar = tk.Button(frame_botoes, text="Cancelar", command=janela_custos.destroy)
+    btn_cancelar.pack(side="left", padx=10)
+    
+    # Informações adicionais
+    info_texto = (
+        "Os custos definidos aqui serão utilizados para calcular\n"
+        "o orçamento das diferentes soluções de muro.\n"
+        "Certifique-se de utilizar valores atualizados de mercado."
+    )
+    
+    info_label = tk.Label(janela_custos, text=info_texto, justify="left", wraplength=400)
+    info_label.grid(row=10, column=0, columnspan=2, padx=10, pady=10)
+    
+    # Centralizar a janela
+    janela_custos.update_idletasks()
+    width = janela_custos.winfo_width()
+    height = janela_custos.winfo_height()
+    x = (janela_custos.winfo_screenwidth() // 2) - (width // 2)
+    y = (janela_custos.winfo_screenheight() // 2) - (height // 2)
+    janela_custos.geometry('{}x{}+{}+{}'.format(width, height, x, y))
+    
+    # Iniciar loop da janela
+    janela_custos.mainloop()
+
+def atualizar_info_custos():
+    """
+    Atualiza o rótulo do botão de custos com informações resumidas
+    """
+    try:
+        conc_25 = float(entry_custo_concreto_25.get())
+        conc_6 = float(entry_custo_concreto_6.get())
+        aco = float(entry_custo_aco_ca50.get())
+        
+        texto = f"Concreto: R${conc_25:.2f}/m³ | Aço: R${aco:.2f}/kg"
+        label_info_custos.config(text=texto)
+    except:
+        label_info_custos.config(text="Clique para editar custos")
