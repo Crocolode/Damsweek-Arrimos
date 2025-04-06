@@ -2717,6 +2717,33 @@ entry_phi_aterro = tk.Entry(root)
 entry_phi_aterro.insert(0, "30")  # Valor default
 entry_phi_aterro.grid(row=3, column=1)
 
+# Criar os campos de entrada
+tk.Label(root, text="Muro de Contrafortes", font=("Arial", 14, "bold")).grid(row=1, column=4, columnspan=2)
+
+tk.Label(root, text="Altura do muro (m):").grid(row=2, column=4)
+entry_h_contrafortes = tk.Entry(root)
+entry_h_contrafortes.insert(0, "5.0")
+entry_h_contrafortes.grid(row=2, column=5)
+
+tk.Label(root, text="Largura da base (m):").grid(row=3, column=4)
+entry_b_contrafortes = tk.Entry(root)
+entry_b_contrafortes.insert(0, "3.0")
+entry_b_contrafortes.grid(row=3, column=5)
+
+tk.Label(root, text="Espessura da parede (m):").grid(row=4, column=4)
+entry_espessura = tk.Entry(root)
+entry_espessura.insert(0, "0.3")
+entry_espessura.grid(row=4, column=5)
+
+tk.Label(root, text="Espaçamento contrafortes (m):").grid(row=5, column=4)
+entry_espacamento = tk.Entry(root)
+entry_espacamento.insert(0, "3.0")
+entry_espacamento.grid(row=5, column=5)
+
+tk.Label(root, text="Altura do contraforte (m):").grid(row=6, column=4)
+entry_h_contraforte = tk.Entry(root)
+entry_h_contraforte.insert(0, "1.0")
+entry_h_contraforte.grid(row=6, column=5)
 
 
 # ---------------------------------------------------------------- #
