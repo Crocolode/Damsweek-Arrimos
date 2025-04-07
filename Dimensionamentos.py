@@ -43,15 +43,21 @@ def verificar_instalar_requisitos():
     print("\nTodos os requisitos estão instalados!")
     return True
 
-def dimensionar_muro_arrimo_flexao(h, b, d, gamma_solo, phi, fck, fyk, ka):
+def dimensionar_muro_arrimo_flexao(h, b, d, gamma_solo, phi, fck, fyk, ka, h_agua=0):
     print("=== Dimensionamento de Muro de Arrimo à Flexão ===")
     
     # Cálculo do empuxo ativo (Teoria de Rankine)
     ea = 0.5 * gamma_solo * h**2 * ka  # Empuxo ativo total
                 # Talvez aqui usar o empuxo inclinado pra fazer o paramento de montante inclinado?
     
+    # Empuxo de água (caso haja água)
+    ea_agua = 0.5 * 10 * h_agua**2 * ka # Gamma da água = 10 kN/m³ (Eletrobrás, 2003)
+
+    # Empuxo total
+    ea_total = ea + ea_agua     # Utilizar para armadura de cisalhamento? 
+
     # Momento fletor na base
-    momento = ea * h/3  # kN.m/m
+    momento = ea * h/3 + ea_agua * h_agua/3 # kN.m/m 
     
     # Dimensionamento estrutural
     # d = h/12  # Altura útil estimada - Não usei esse na última revisão
@@ -81,8 +87,6 @@ def dimensionar_muro_arrimo_flexao(h, b, d, gamma_solo, phi, fck, fyk, ka):
     if x/(h-d) > 0.5:
         print("ALERTA: Momento muito grande para a seção - Recomendado aumentar a altura útil!")
         return
-        
-    # print(x)
 
     as_calc = momento * 1.4 / (((d * 100-5)-0.4 * x) * fyd) * 1000  # Área de aço calculada em cm²
     
@@ -776,7 +780,7 @@ def calcular():
 
         # Obter os valores dos parâmetros de estabilidade
         gamma_concreto = float(entry_gamma_concreto.get())
-        nivel_agua = h
+        nivel_agua = float(entry_nivel_agua.get())
         coef_empuxo = float(entry_coef_empuxo.get())
         pressao_adm = float(entry_pressao_adm.get())
         
@@ -788,20 +792,16 @@ def calcular():
         ka = float(entry_coef_empuxo.get())
 
         # Chamar a função de dimensionamento aqui
-        dia_barra, espacamento = dimensionar_muro_arrimo_flexao(h, b_mon, d, gamma_solo, phi, fck, fyk, coef_empuxo)
-        
-        
+        dia_barra, espacamento = dimensionar_muro_arrimo_flexao(h, b_mon, d, gamma_solo, phi, fck, fyk, coef_empuxo, nivel_agua)
         as_final = math.pi * (dia_barra/10)**2 / 4 * 100 / espacamento  # área de uma barra em cm²
 
         # volume_corte = plotar_muro_arrimo(b_jus, b_mon, h, d, as_final, gamma_solo) / gamma_solo  # Chama a função para plotar o muro
         peso_corte, _, volume_aterro, volume_corte = calcular_peso_terra_montante(h, b_mon, gamma_solo)  # Captura apenas o peso
-        
         volume_corte = peso_corte / gamma_solo
 
         # Exemplo de resultados gerados
         volume_concreto_25 = (h + b_jus + b_mon) * d - d * d  # Exemplo de valor
         volume_concreto_6 = 0  # Muro de flexão não usa esse concreto
-
         peso_aco_ca50 = as_final * 7.85 * (h + b_jus + b_mon * 1.4) * 0.7 # Verificar armadura horizontal (esse 1,4 multiplicando) 0.7 é o fator de redução (a seção inteira não é armada pro momento máximo)
 
         # Calcula o volume de carga e descarga
@@ -1748,14 +1748,12 @@ def atualizar_info_custos():
     except:
         label_info_custos.config(text="Clique para editar custos") 
 
-
 # Criar a janela principal
 root = tk.Tk()
 # Mostrar avisos antes de continuar
 mostrar_avisos_iniciais()
 
 root.title("Dimensionamento de Muro de Arrimo")
-
 
 # Novos campos de entrada para os parâmetros de estabilidade
 tk.Label(root, text="Param. Muro Flexão:", font=("Arial", 12)).grid(row=0, column=2, columnspan=2)
@@ -1902,24 +1900,25 @@ entry_coef_empuxo = tk.Entry(root)
 entry_coef_empuxo.insert(0, "0.35")  # Valor default
 entry_coef_empuxo.grid(row=3, column=7)
 
-
 tk.Label(root, text="Pressão Admissível Fundação (kN/m²):").grid(row=4, column=6)
 entry_pressao_adm = tk.Entry(root)
 entry_pressao_adm.insert(0, "200")  # Valor default
 entry_pressao_adm.grid(row=4, column=7)
 
-# Adicionar campo para base máxima permitida
 tk.Label(root, text="Base Máxima Permitida (m):").grid(row=5, column=0)
 entry_base_max = tk.Entry(root)
 entry_base_max.insert(0, "3.0")  # Valor default
 entry_base_max.grid(row=5, column=1)
 
+tk.Label(root, text="Nível de Água (m):").grid(row=6, column=0)
+entry_nivel_agua = tk.Entry(root)
+entry_nivel_agua.insert(0, "0")  # Valor default
+entry_nivel_agua.grid(row=6, column=1)
 
 tk.Label(root, text="Coesão do Solo (kN/m²):").grid(row=5, column=6)
 entry_coesao = tk.Entry(root)
 entry_coesao.insert(0, "100")  # Valor default
 entry_coesao.grid(row=5, column=7)
-
 
 tk.Label(root, text="Ângulo de Atrito (graus):").grid(row=6, column=6)
 entry_phi_estabilidade = tk.Entry(root)
