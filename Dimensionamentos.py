@@ -43,11 +43,11 @@ def verificar_instalar_requisitos():
     print("\nTodos os requisitos estão instalados!")
     return True
 
-def dimensionar_muro_arrimo_flexao(h, b, d, gamma_solo, phi, fck, fyk, kp, h_agua=0):
+def dimensionar_muro_arrimo_flexao(h, b, d, gamma_solo, phi, fck, fyk, ka, h_agua=0):
     print("=== Dimensionamento de Muro de Arrimo à Flexão ===")
     
     # Cálculo do empuxo passivo (Teoria de Rankine)
-    ep = 0.5 * gamma_solo * h**2 * kp  # Empuxo passivo total
+    ep = 0.5 * gamma_solo * h**2 * ka  # Empuxo passivo total
     
     # Empuxo de água (caso haja água)
     e_agua = 0.5 * 10 * h_agua**2 # Gamma da água = 10 kN/m³ (Eletrobrás, 2003)
@@ -120,43 +120,6 @@ def dimensionar_muro_arrimo_flexao(h, b, d, gamma_solo, phi, fck, fyk, kp, h_agu
         print("Área de aço necessária é inválida.")
     
     return dia_barra, espacamento
-    """
-    Calcula o empuxo ativo para paramentos inclinados
-    Parâmetros:
-    h: altura do muro (m) - Altura total do muro de contenção
-    beta: ângulo de inclinação do terreno (graus) - Ângulo que o terreno faz com a horizontal
-    phi: ângulo de atrito interno do solo (graus) - Parâmetro de resistência do solo
-    gamma_solo: peso específico do solo (kN/m³) - Peso por unidade de volume do solo
-    delta: ângulo de atrito solo-muro (graus) - Ângulo de atrito entre o solo e a parede do muro
-    
-    Retorna:
-    ea_inclinado: Empuxo ativo total considerando a inclinação (kN/m)
-    ea_horizontal: Componente horizontal do empuxo (kN/m)
-    ea_vertical: Componente vertical do empuxo (kN/m)
-    """
-    # Conversão dos ângulos de graus para radianos para cálculos trigonométricos
-    beta_rad = math.radians(beta)
-    phi_rad = math.radians(phi)
-    delta_rad = math.radians(delta)
-    
-    # Cálculo do coeficiente de empuxo ativo para paramento inclinado (Ka)
-    # Fórmula de Coulomb considerando inclinação do terreno e atrito solo-muro
-    numerador = math.cos(phi_rad - beta_rad)**2
-    
-    termo1 = (1 + math.sqrt((math.sin(phi_rad + delta_rad) * math.sin(phi_rad - beta_rad)) / 
-              (math.cos(delta_rad) * math.cos(beta_rad))))**2
-    
-    ka_inclinado = numerador / (math.cos(delta_rad)**2 * termo1)
-    
-    # Cálculo do empuxo ativo total usando a fórmula: Ea = 1/2 * γ * H² * Ka
-    ea_inclinado = 0.5 * gamma_solo * h**2 * ka_inclinado
-    
-    # Decomposição do empuxo em componentes horizontal e vertical
-    # Considerando o ângulo de atrito solo-muro (delta)
-    ea_horizontal = ea_inclinado * math.cos(delta_rad)
-    ea_vertical = ea_inclinado * math.sin(delta_rad)
-    
-    return ea_inclinado, ea_horizontal, ea_vertical
 
 def calcular_peso_terra_montante(h, b_mont, gamma_solo, beta=0):
     """
@@ -327,7 +290,7 @@ def plotar_muro_arrimo(b_jus, b_mon, h, d, as_final, gamma_solo, tensao_max, pre
     plt.tight_layout()
     plt.show()
 
-def plotar_muro_gravidade(h, d, crista, b_mon, gamma_concreto, gamma_solo, phi, c, pressao_adm, nivel_agua, fs_coesao, fs_atrito, ka, calculos_gravidade):
+def plotar_muro_gravidade(h, d, crista, b_mon, gamma_concreto, gamma_solo, phi, c, pressao_adm, nivel_agua, fs_coesao, fs_atrito, k0, calculos_gravidade):
     """
     Plota o muro de gravidade com as dimensões especificadas e um relatório de verificação
     
@@ -419,7 +382,7 @@ def plotar_muro_gravidade(h, d, crista, b_mon, gamma_concreto, gamma_solo, phi, 
     ax.set_aspect('equal', adjustable='datalim')
 
     # Gera quantitativos
-    quantitativos = gerar_quantitativos_gravidade(h, crista, b_mon, gamma_concreto, gamma_solo, phi, c, pressao_adm, nivel_agua, fs_coesao, fs_atrito, ka)
+    quantitativos = gerar_quantitativos_gravidade(h, crista, b_mon, gamma_concreto, gamma_solo, phi, c, pressao_adm, nivel_agua, fs_coesao, fs_atrito, k0)
     
     # Configurações do gráfico
     ax.set_xlim(-1, crista + b_mon + 3)
@@ -568,7 +531,7 @@ def exibir_muro_gravidade_popup():
         nivel_agua = float(entry_nivel_agua.get())
         fs_coesao = float(entry_fs_coesao.get())
         fs_atrito = float(entry_fs_atrito.get())
-        k0 = float(entry_ka.get())  # Usando Ka como K0 para o muro de gravidade
+        k0 = float(entry_k0.get())  # Usando Ka como K0 para o muro de gravidade
         base_max = float(entry_base_max.get()) if entry_base_max.get() else None
         
         # Validar dados
@@ -602,6 +565,175 @@ def exibir_muro_gravidade_popup():
             gamma_concreto, gamma_solo, phi, c, 
             pressao_adm, nivel_agua, fs_coesao, fs_atrito, k0,
             resultado  # Passando o resultado completo como calculos_gravidade
+        )
+        
+    except ValueError as e:
+        messagebox.showerror("Erro", f"Por favor, insira valores válidos: {str(e)}")
+    except Exception as e:
+        messagebox.showerror("Erro", f"Ocorreu um erro: {str(e)}")
+
+
+
+def plotar_diagramas_gravidade(h, crista, b_mon, gamma_concreto, gamma_solo, phi, c, pressao_adm, nivel_agua, fs_coesao, fs_atrito, k0, base_max=None, gamma_agua=10):
+    """
+    Plota os diagramas detalhados do muro de gravidade com todas as cargas e excentricidades em um único gráfico
+    
+    Parâmetros:
+    h: altura total do muro (m)
+    crista: largura da crista (m)
+    b_mon: largura da base a montante (m)
+    gamma_concreto: peso específico do concreto (kN/m³)
+    gamma_solo: peso específico do solo (kN/m³)
+    phi: ângulo de atrito interno do solo (graus)
+    c: coesão do solo (kN/m²)
+    pressao_adm: pressão admissível do solo (kN/m²)
+    nivel_agua: nível d'água (m)
+    fs_coesao: fator de segurança à coesão
+    fs_atrito: fator de segurança ao atrito
+    k0: coeficiente de empuxo em repouso
+    base_max: base máxima permitida (m) [opcional]
+    gamma_agua: peso específico da água (kN/m³)
+    """
+    
+    # Criar figura
+    fig, ax = plt.subplots(figsize=(10, 8))
+    ax.set_title('Diagrama do Muro de Gravidade')
+    
+    # Desenhar o muro
+    pontos_muro = [
+        [0, 0],
+        [b_mon, 0],
+        [b_mon - (b_mon - crista), h],
+        [0, h]
+    ]
+    ax.add_patch(plt.Polygon(pontos_muro, closed=True, fill=False, color='black', linewidth=2))
+    
+    # Calcular cargas
+    area_muro = 0.5 * (b_mon - crista) * h + crista * h
+    peso_muro = area_muro * gamma_concreto
+    peso_solo = 0.5 * (b_mon - crista) * h * (gamma_solo - gamma_agua)
+    e0 = 0.5 * (gamma_solo - gamma_agua) * h**2 * k0
+    e0_agua = 0.5 * gamma_agua * h**2
+    
+    # Calcular tensões e momentos
+    x_cg = b_mon/2
+    y_cg = h/3 * (2*crista + b_mon)/(crista + b_mon)
+    braco_estabilizante_cg = ((b_mon - crista)/3 + crista)
+    terra_estabilizante_cg = ((b_mon - crista)*2/3 + crista)
+    braco_tombamento = h/3
+    
+    momento_total = peso_muro*braco_estabilizante_cg + peso_solo*terra_estabilizante_cg - (e0 + e0_agua)*braco_tombamento
+    peso_total = peso_muro + peso_solo
+    
+    tensao_max = peso_total/b_mon + abs(momento_total/(b_mon**2/6))
+    tensao_min = peso_total/b_mon - abs(momento_total/(b_mon**2/6))
+    
+    # Desenhar cargas
+    # Peso do muro
+    ax.arrow(braco_estabilizante_cg, y_cg, 0, -0.5, head_width=0.1, head_length=0.1, fc='blue', ec='blue', label='Peso do Muro')
+    ax.text(braco_estabilizante_cg, y_cg + 0.5, f'Pm = {peso_muro:.1f} kN/m', ha='center', color='blue')
+    
+    # Peso do solo - Desenhar polígono de forças
+    pontos_solo = [
+        [b_mon - (b_mon - crista), h],
+        [b_mon, h],
+        [b_mon, 0],
+    ]
+    ax.add_patch(plt.Polygon(pontos_solo, closed=True, fill=True, color='green', alpha=0.2))
+
+    # CG do solo
+    x_cg_solo = b_mon - (b_mon - crista)/3
+    y_cg_solo = 2*h/3
+
+    ax.arrow(x_cg_solo, y_cg_solo, 0, -0.5, head_width=0.1, head_length=0.1, fc='green', ec='green', label='Peso do Solo')
+    ax.text(x_cg_solo, y_cg_solo + 0.2, f'Ps = {peso_solo:.1f} kN/m', ha='center', color='green')
+    
+    # Empuxo - Diagrama triangular
+    empuxo_scale = 0.02
+    pontos_empuxo = [
+        [b_mon, 0],
+        [b_mon, h],
+        [b_mon + e0*empuxo_scale, 0]
+    ]
+    ax.add_patch(plt.Polygon(pontos_empuxo, closed=True, fill=True, color='red', alpha=0.2))
+    ax.arrow(b_mon + e0*empuxo_scale, h/3, -e0*empuxo_scale, 0, head_width=0.1, head_length=0.1, fc='red', ec='red', label='Empuxo')
+    ax.text(b_mon + e0*empuxo_scale/2, h/3, f'E = {e0 + e0_agua:.1f} kN/m', ha='center', color='red')
+    
+    # Diagrama de tensões na base
+    tensao_scale = 0.003
+
+
+    ax.plot([0, b_mon], [-tensao_max*tensao_scale, -tensao_min*tensao_scale], 'r-', linewidth=2, label='Tensões na Base')
+    ax.plot([0, b_mon], [-pressao_adm*tensao_scale, -pressao_adm*tensao_scale], 'g--', linewidth=2, label=f'Pressão Admissível: {pressao_adm} kN/m²')
+    
+    # Configurar o gráfico
+    ax.set_xlim(- 0.5, b_mon + 0.5 + e0*empuxo_scale)
+    ax.set_ylim(-tensao_max*tensao_scale - 0.5, h + 0.5)
+    ax.grid(True)
+    ax.legend(loc='upper right', bbox_to_anchor=(1.15, 1))
+    
+    # Adicionar informações gerais
+    plt.figtext(0.5, 0.01, 
+                f'Fator de Segurança ao Deslizamento: {c * b_mon / ((e0 + e0_agua) * fs_coesao) + (peso_muro + peso_solo)*math.tan(math.radians(phi)) / ((e0 + e0_agua) * fs_atrito):.2f}\n'
+                f'Fator de Segurança ao Tombamento: {(peso_muro*braco_estabilizante_cg + peso_solo*terra_estabilizante_cg) / ((e0 + e0_agua)*braco_tombamento):.2f}\n'
+                f'Tensão Máxima: {tensao_max:.2f} kN/m²\n'
+                f'Tensão Mínima: {tensao_min:.2f} kN/m²',
+                ha='center', fontsize=10, bbox=dict(facecolor='white', alpha=0.8))
+    
+    # Adicionar cotas (linhas de dimensão) nos eixos x e y
+    # Cota da base (x)
+    ax.annotate('', xy=(0, 0.3), xytext=(b_mon, 0.3),
+                arrowprops=dict(arrowstyle='<->', color='#34495e', lw=1.5))
+    ax.text(b_mon/2, 0.2, f'Base: {b_mon:.2f} m', ha='center', va='top', fontsize=11, color='#34495e')
+
+    # Cota da altura (y)
+    ax.annotate('', xy=(-0.3, 0), xytext=(-0.3, h),
+                arrowprops=dict(arrowstyle='<->', color='#34495e', lw=1.5))
+    ax.text(-0.35, h/2, f'Altura: {h:.2f} m', ha='right', va='center', fontsize=11, color='#34495e', rotation='vertical')
+
+    # Peso do muro (cota do braço)
+    ax.annotate('', xy=(0, y_cg), xytext=(braco_estabilizante_cg, y_cg),
+                arrowprops=dict(arrowstyle='<->', color='blue', lw=1, ls='--'))
+    ax.text(braco_estabilizante_cg/2, y_cg+0.15, f'{braco_estabilizante_cg:.2f} m',
+            ha='center', va='bottom', fontsize=9, color='blue')
+
+    # Peso do solo (cota do braço)
+    ax.annotate('', xy=(0, y_cg_solo), xytext=(x_cg_solo, y_cg_solo),
+                arrowprops=dict(arrowstyle='<->', color='green', lw=1, ls='--'))
+    ax.text(x_cg_solo/2, y_cg_solo+0.12, f'{x_cg_solo-crista:.2f} m',
+            ha='center', va='bottom', fontsize=9, color='green')
+
+    # Empuxo (altura do muro)
+    ax.annotate('', xy=(b_mon+e0*empuxo_scale+0.15, 0), xytext=(b_mon+e0*empuxo_scale+0.15, h/3),
+                arrowprops=dict(arrowstyle='<->', color='red', lw=1, ls='--'))
+    ax.text(b_mon+e0*empuxo_scale+0.18, h/2/3, f'h = {h/3:.2f} m',
+            ha='left', va='center', fontsize=9, color='red', rotation=90)
+
+    plt.tight_layout()
+    plt.show()
+
+def exibir_diagramas_gravidade_popup():
+    try:
+        # Obter os valores da interface principal
+        h = float(entry_h.get())
+        crista = float(entry_crista.get())
+        b_mon = float(entry_b_gravidade.get())
+        gamma_concreto = float(entry_gamma_concreto.get())
+        gamma_solo = float(entry_gamma_solo.get())
+        phi = float(entry_phi_estabilidade.get())
+        c = float(entry_coesao.get())
+        pressao_adm = float(entry_pressao_adm.get())
+        nivel_agua = float(entry_nivel_agua.get())
+        fs_coesao = float(entry_fs_coesao.get())
+        fs_atrito = float(entry_fs_atrito.get())
+        k0 = float(entry_k0.get())
+        base_max = float(entry_base_max.get()) if entry_base_max.get() else None
+        
+        # Plotar os diagramas
+        plotar_diagramas_gravidade(
+            h, crista, b_mon, gamma_concreto, gamma_solo,
+            phi, c, pressao_adm, nivel_agua, fs_coesao,
+            fs_atrito, k0, base_max
         )
         
     except ValueError as e:
@@ -688,7 +820,7 @@ def mostrar_avisos_iniciais():
     # Criar uma janela popup
     janela_avisos = tk.Toplevel()
     janela_avisos.title("Avisos Importantes")
-    janela_avisos.geometry("500x400")
+    janela_avisos.geometry("600x500")
     janela_avisos.resizable(False, False)
     janela_avisos.transient(root)  # Define como modal
     janela_avisos.grab_set()       # Impede interação com a janela principal
@@ -793,8 +925,8 @@ def calcular():
         # Obter os valores dos parâmetros de estabilidade
         gamma_concreto = float(entry_gamma_concreto.get())
         nivel_agua = float(entry_nivel_agua.get())
-        kp = float(entry_kp.get())  # Coeficiente de empuxo passivo para muro de flexão
-        ka = float(entry_ka.get())  # Coeficiente de empuxo ativo para muro de gravidade
+        ka = float(entry_ka.get())  # Coeficiente de empuxo passivo para muro de flexão
+        k0 = float(entry_k0.get())  # Coeficiente de empuxo ativo para muro de gravidade
         pressao_adm = float(entry_pressao_adm.get())
         
         # Obter o valor da base máxima permitida
@@ -804,7 +936,7 @@ def calcular():
         phi_estabilidade = float(entry_phi_estabilidade.get())
 
         # Chamar a função de dimensionamento aqui
-        dia_barra, espacamento = dimensionar_muro_arrimo_flexao(h, b_mon, d, gamma_solo, phi, fck, fyk, kp, nivel_agua)
+        dia_barra, espacamento = dimensionar_muro_arrimo_flexao(h, b_mon, d, gamma_solo, phi, fck, fyk, ka, nivel_agua)
         as_final = math.pi * (dia_barra/10)**2 / 4 * 100 / espacamento  # área de uma barra em cm²
 
         peso_corte, _, volume_aterro, volume_corte = calcular_peso_terra_montante(h, b_mon, gamma_solo)
@@ -860,7 +992,7 @@ def calcular():
 
         resultados_estabilidade = verificar_estabilidade_flexao(
             h, d, b_jus, b_mon, gamma_solo, phi_estabilidade,
-            gamma_concreto, nivel_agua, kp, pressao_adm,
+            gamma_concreto, nivel_agua, ka, pressao_adm,
             c, fs_coesao, fs_atrito, base_max
         )
         
@@ -1026,7 +1158,7 @@ def botao_plotar_muro_arrimo():
         fck = float(entry_fck.get())
         fyk = float(entry_fyk.get())
         gamma_concreto = float(entry_gamma_concreto.get())
-        kp = float(entry_kp.get())  # Coeficiente de empuxo passivo
+        ka = float(entry_ka.get())  # Coeficiente de empuxo passivo
         pressao_adm = float(entry_pressao_adm.get())
         c = float(entry_coesao.get())
         fs_coesao = float(entry_fs_coesao.get())
@@ -1035,13 +1167,13 @@ def botao_plotar_muro_arrimo():
         nivel_agua = float(entry_nivel_agua.get())
 
         # Chamar a função de dimensionamento
-        dia_barra, espacamento = dimensionar_muro_arrimo_flexao(h, b_mon, d, gamma_solo, phi, fck, fyk, kp, nivel_agua)
+        dia_barra, espacamento = dimensionar_muro_arrimo_flexao(h, b_mon, d, gamma_solo, phi, fck, fyk, ka, nivel_agua)
         as_final = math.pi * (dia_barra/10)**2 / 4 * 100 / espacamento  # área de uma barra em cm²
 
         # Verificação de estabilidade
         resultados_estabilidade = verificar_estabilidade_flexao(
             h, d, b_jus, b_mon, gamma_solo, phi,
-            gamma_concreto, nivel_agua, kp, pressao_adm,
+            gamma_concreto, nivel_agua, ka, pressao_adm,
             c, fs_coesao, fs_atrito, base_max
         )
         
@@ -1052,7 +1184,7 @@ def botao_plotar_muro_arrimo():
     except ValueError:
         messagebox.showerror("Erro", "Por favor, insira valores válidos.")
 
-def verificar_estabilidade_flexao(h, d, b_jus, b_mon, gamma_solo, phi_estabilidade, gamma_concreto, nivel_agua, kp, pressao_adm, c, fs_coesao, fs_atrito, base_max=None):
+def verificar_estabilidade_flexao(h, d, b_jus, b_mon, gamma_solo, phi_estabilidade, gamma_concreto, nivel_agua, ka, pressao_adm, c, fs_coesao, fs_atrito, base_max=None):
     """
     Verifica a estabilidade do muro de arrimo considerando momentos em relação ao centro da base
     e a altura do muro, incluindo a coesão do solo.
@@ -1065,7 +1197,7 @@ def verificar_estabilidade_flexao(h, d, b_jus, b_mon, gamma_solo, phi_estabilida
     phi: ângulo de atrito interno do solo (graus)
     gamma_concreto: peso específico do concreto (kN/m³)
     nivel_agua: nível d'água (m)
-    kp: coeficiente de empuxo passivo
+    ka: coeficiente de empuxo ativo
     pressao_adm: pressão admissível do solo (kN/m²)
     c: coesão do solo (kN/m²) [opcional, padrão = 0]
     fs_coesao: fator de segurança à coesão
@@ -1079,9 +1211,9 @@ def verificar_estabilidade_flexao(h, d, b_jus, b_mon, gamma_solo, phi_estabilida
     b_total = b_jus + b_mon
     
     # Cálculo do empuxo passivo
-    ep = 0.5 * gamma_solo * h**2 * kp  # Empuxo passivo total
+    ep = 0.5 * gamma_solo * h**2 * ka  # Empuxo passivo total
     
-    e_agua = 0.5 * 10 * nivel_agua**2 * kp # Empuxo de água 10 kN/m³
+    e_agua = 0.5 * 10 * nivel_agua**2 * ka # Empuxo de água 10 kN/m³
 
     # Área da seção transversal do muro
     area_muro = ((b_total) * d) + (h * d) - (d * d)
@@ -1304,7 +1436,7 @@ def exibir_muro_gravidade_popup():
         nivel_agua = float(entry_nivel_agua.get())
         fs_coesao = float(entry_fs_coesao.get())
         fs_atrito = float(entry_fs_atrito.get())
-        k0 = float(entry_ka.get())  # Usando Ka como K0 para o muro de gravidade
+        k0 = float(entry_k0.get())  # Usando Ka como K0 para o muro de gravidade
         base_max = float(entry_base_max.get()) if entry_base_max.get() else None
         
         # Validar dados
@@ -1908,15 +2040,15 @@ entry_gamma_concreto = tk.Entry(root)
 entry_gamma_concreto.insert(0, "24")  # Valor default
 entry_gamma_concreto.grid(row=4, column=1)
 
-tk.Label(root, text="Coeficiente de Empuxo Ativo (Ka):").grid(row=3, column=6)
-entry_ka = tk.Entry(root)
-entry_ka.insert(0, "0.35")
-entry_ka.grid(row=3, column=7)
+tk.Label(root, text="Coeficiente de Empuxo em Repouso (K0):").grid(row=3, column=6)
+entry_k0 = tk.Entry(root)
+entry_k0.insert(0, "0.67")
+entry_k0.grid(row=3, column=7)
 
-tk.Label(root, text="Coeficiente de Empuxo Passivo (Kp):").grid(row=4, column=6)
-entry_kp = tk.Entry(root)
-entry_kp.insert(0, "3.0")
-entry_kp.grid(row=4, column=7)
+tk.Label(root, text="Coeficiente de Empuxo Ativo (Ka):").grid(row=4, column=6)
+entry_ka = tk.Entry(root)
+entry_ka.insert(0, "0.36")
+entry_ka.grid(row=4, column=7)
 
 tk.Label(root, text="Pressão Admissível Fundação (kN/m²):").grid(row=5, column=6)
 entry_pressao_adm = tk.Entry(root)
@@ -1969,14 +2101,17 @@ btn_calcular = tk.Button(root, text="Calcular", command=calcular)
 btn_calcular.grid(row=21, column=0)
 
 btn_calcular = tk.Button(root, text="Exibir muro de flexão", command=botao_plotar_muro_arrimo)
-btn_calcular.grid(row=20, column=1)
+btn_calcular.grid(row=21, column=1)
 
 # Adicione este botão na interface gráfica
 btn_gravidade = tk.Button(root, text="Exibir Muro de Gravidade", 
                         command=lambda: exibir_muro_gravidade_popup())
-btn_gravidade.grid(row=20, column=4, padx=10, pady=5)
+btn_gravidade.grid(row=21, column=4, padx=10, pady=5)
 
-# Seção Muro de Flexão (colunas 0-2)
+# Adicionar o botão na interface principal
+btn_diagramas_gravidade = tk.Button(root, text="Exibir Diagramas Detalhados", 
+                         command=exibir_diagramas_gravidade_popup)
+btn_diagramas_gravidade.grid(row=21, column=3, padx=10, pady=5)
 
 # Labels para exibir os quantitativos gerados
 tk.Label(root, text="Quantitativos Gerados:", font=("Arial", 12)).grid(row=9, column=0)
