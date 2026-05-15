@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+.env/
+
+# Build outputs
+build/
+dist/
+*.spec
+
+# IDE files
+.vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Distribution / packaging
+*.egg-info/
+.eggs/
+*.whl
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Misc
+.DS_Store
+*.log
+*.tmp
+
+# OneDrive
+~$*

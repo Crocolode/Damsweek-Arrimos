@@ -1,47 +1,48 @@
 # Importando bibliotecas necessárias
-import math
-import numpy as np
-import subprocess
 import sys
+import os
+
+# Executável PyInstaller: backend explícito evita varredura de backends e acelera a abertura
+if getattr(sys, "frozen", False):
+    os.environ.setdefault("MPLBACKEND", "TkAgg")
+
+import math
+import subprocess
+import csv
+from datetime import datetime
+
+import matplotlib
+
+matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 import tkinter as tk
-from tkinter import messagebox
-import plotly.graph_objects as go
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from tkinter import messagebox, ttk
 
-# Função para instalar pré-requisitos
-def verificar_instalar_requisitos():
-    """
-    Verifica se os pacotes necessários estão instalados e os instala se necessário
-    """
-    requisitos = ['plotly', 'numpy']
-    
-    def instalar_pacote(pacote):
-        print(f"Instalando {pacote}...")
-        try:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", pacote])
-            print(f"{pacote} instalado com sucesso!")
-            return True
-        except subprocess.CalledProcessError:
-            print(f"Erro ao instalar {pacote}. Por favor, instale manualmente usando: pip install {pacote}")
-            return False
 
-    todos_instalados = True
-    for req in requisitos:
-        try:
-            __import__(req)
-            print(f"{req} já está instalado.")
-        except ImportError:
-            print(f"{req} não encontrado.")
-            if not instalar_pacote(req):
-                todos_instalados = False
-    
-    if not todos_instalados:
-        print("\nAlguns pacotes não puderam ser instalados. Por favor, instale-os manualmente.")
-        sys.exit(1)
-    
-    print("\nTodos os requisitos estão instalados!")
-    return True
+def calcular_subpressao_base(base, nivel_agua, gamma_agua=10.0, modo_subpressao="desconsiderar"):
+    """
+    Calcula a resultante de subpressão na base (kN/m) e o braço em relação ao ponto de tombamento (m).
+    - desconsiderar: U = 0
+    - considerar triangular: diagrama triangular (máximo a montante, zero a jusante)
+    - considerar retangular/base infinita: diagrama uniforme ao longo da base
+    """
+    if nivel_agua <= 0 or base <= 0:
+        return 0.0, 0.0
+
+    if modo_subpressao == "considerar triangular":
+        forca_sub = 0.5 * gamma_agua * nivel_agua * base
+        braco_sub_pt = (2.0 / 3.0) * base
+    elif modo_subpressao == "considerar retangular/base infinita":
+        forca_sub = gamma_agua * nivel_agua * base
+        braco_sub_pt = 0.5 * base
+    else:
+        forca_sub = 0.0
+        braco_sub_pt = 0.0
+
+    return forca_sub, braco_sub_pt
+
+# Concreto magro sob a base do muro de flexão (somente quantitativo; não entra em estabilidade nem no modelo estrutural)
+ESPESSURA_CONCRETO_MAGRO_BASE_FLEXAO_M = 0.05
 
 def dimensionar_muro_arrimo_flexao(h, b, d, gamma_solo_sat, gamma_solo_sub, phi, fck, fyk, ka, h_agua=0):
     print("=== Dimensionamento de Muro de Arrimo à Flexão ===")
@@ -783,6 +784,7 @@ def exibir_muro_gravidade_popup():
         k0 = float(entry_k0.get())  # Usando Ka como K0 para o muro de gravidade
         base_max = float(entry_base_max.get())
         gamma_agua = float(entry_gamma_agua.get())
+        modo_subpressao = var_subpressao.get()
         sobrecarga_mon = float(entry_sobrecarga_mon.get())
         inclinacao = var_inclinacao.get()  # Obter a inclinação escolhida pelo usuário
         
@@ -802,9 +804,12 @@ def exibir_muro_gravidade_popup():
                 return
         
         # Calcular muro de gravidade
-        resultado = calcular_muro_gravidade(h, crista, b_mon, gamma_concreto, gamma_solo_sat, gamma_solo_sub, 
-                                           phi, c, pressao_adm, nivel_agua, fs_coesao, 
-                                           fs_atrito, k0, gamma_agua, sobrecarga_mon, base_max)
+        resultado = calcular_muro_gravidade(
+            h, crista, b_mon, gamma_concreto, gamma_solo_sat, gamma_solo_sub,
+            phi, c, pressao_adm, nivel_agua=nivel_agua, fs_coesao=fs_coesao,
+            fs_atrito=fs_atrito, k0=k0, base_max=base_max, gamma_agua=gamma_agua,
+            sobrecarga_mon=sobrecarga_mon, inclinacao=inclinacao, modo_subpressao=modo_subpressao
+        )
         
         # Verificar se o resultado foi bem-sucedido
         if resultado is None:
@@ -890,7 +895,7 @@ def calcular_quantitativos_muro_gravidade(dados_dimensionamento, dados_verificac
     }
 
 def gerar_quantitativos_gravidade(h, crista, b_mon, gamma_concreto, gamma_solo_sat, gamma_solo_sub, phi, c, pressao_adm, nivel_agua, fs_coesao, fs_atrito,
-                                 ka, gamma_agua, sobrecarga_mon, preco_concreto=350, preco_aco=8.5, diametro_barra=12.5, espacamento_barra=0.15, base_max=0, inclinacao="montante"):
+                                 ka, gamma_agua, sobrecarga_mon, preco_concreto=350, preco_aco=8.5, diametro_barra=12.5, espacamento_barra=0.15, base_max=0, inclinacao="montante", modo_subpressao="desconsiderar"):
     """
     Gera quantitativos de materiais para o muro de gravidade
     
@@ -920,7 +925,12 @@ def gerar_quantitativos_gravidade(h, crista, b_mon, gamma_concreto, gamma_solo_s
         base_max = b_mon*1.5
 
     # Cálculos do muro de gravidade
-    resultado_gravidade = calcular_muro_gravidade(h, crista, b_mon, gamma_concreto, gamma_solo_sat, gamma_solo_sub, phi, c, pressao_adm, nivel_agua, fs_coesao, fs_atrito, ka, gamma_agua, sobrecarga_mon, base_max, inclinacao)
+    resultado_gravidade = calcular_muro_gravidade(
+        h, crista, b_mon, gamma_concreto, gamma_solo_sat, gamma_solo_sub, phi, c, pressao_adm,
+        nivel_agua=nivel_agua, fs_coesao=fs_coesao, fs_atrito=fs_atrito, k0=ka,
+        base_max=base_max, gamma_agua=gamma_agua, sobrecarga_mon=sobrecarga_mon,
+        inclinacao=inclinacao, modo_subpressao=modo_subpressao
+    )
     
     # Cálculo do volume de concreto (trapézio)
     volume_concreto = resultado_gravidade['volume_concreto']
@@ -983,6 +993,112 @@ def calcular_altura_util(h):
     d = round(d_exato * 20) / 20  # Dividir por 20 porque 5cm = 0.05m = 1/20m
     return max(d, 0.05)  # Garantir valor mínimo de 5 cm
 
+def calcular_deslocamento_flexao(h, espessura_fuste, fck, ka, gamma_solo_sat, gamma_solo_sub,
+                                 nivel_agua=0, sobrecarga_mon=0.0, limite_relativo=500):
+    """
+    Calcula o deslocamento horizontal no topo do muro à flexão (ELS).
+
+    Modelo adotado:
+    - Fuste idealizado como viga em balanço engastada na base;
+    - Carregamento horizontal triangular (empuxo ativo do solo) e, se houver,
+      parcela uniforme (empuxo por sobrecarga q com σ_h = ka·q em toda a altura);
+    - Hipótese linear elástica com rigidez EI constante.
+
+    Unidades de entrada:
+    - h, espessura_fuste, nivel_agua: m
+    - fck: MPa
+    - gamma_solo_sat, gamma_solo_sub: kN/m³
+    - sobrecarga_mon: carga vertical a montante (kN/m²)
+
+    Retorna:
+    - deslocamento_topo_mm, limite_deslocamento_mm, deslocamento_ok e parâmetros intermediários.
+    """
+    if h <= 0 or espessura_fuste <= 0 or fck <= 0 or ka < 0:
+        return {
+            'deslocamento_topo_mm': 0.0,
+            'limite_deslocamento_mm': 0.0,
+            'deslocamento_ok': False,
+            'ec_mpa': 0.0,
+            'inercia_m4': 0.0,
+            'q_base_kN_m': 0.0,
+            'q_uniforme_kN_m': 0.0
+        }
+
+    nivel_agua_efetivo = max(0.0, min(nivel_agua, h))
+
+    # Tensão horizontal na base por empuxo ativo do solo (triangular ao longo da altura).
+    sigma_h_base = ka * (
+        gamma_solo_sat * (h - nivel_agua_efetivo) + gamma_solo_sub * nivel_agua_efetivo
+    )  # kN/m²
+
+    # Carga triangular: intensidade máxima na base (kN/m por m de comprimento do muro).
+    q_base = sigma_h_base  # kN/m, largura unitária 1 m
+
+    # Parcela uniforme: empuxo da sobrecarga (constante em toda a altura).
+    q_uniforme = ka * max(sobrecarga_mon, 0.0)  # kN/m
+
+    # Módulo secante do concreto (MPa) e conversão para kN/m².
+    ec_mpa = 5600 * math.sqrt(fck)
+    ec_kn_m2 = ec_mpa * 1000
+
+    # Inércia do fuste (seção retangular por metro de comprimento).
+    inercia = (1.0 * espessura_fuste**3) / 12.0  # m^4
+
+    denom = ec_kn_m2 * inercia
+    # Triangular (máximo no engaste): δ = q_base·h⁴/(30 E I)
+    desloc_triang_m = q_base * h**4 / (30.0 * denom)
+    # Uniforme em todo o balanço: δ = w·h⁴/(8 E I)
+    desloc_uniform_m = q_uniforme * h**4 / (8.0 * denom)
+    deslocamento_topo_m = desloc_triang_m + desloc_uniform_m
+    deslocamento_topo_mm = deslocamento_topo_m * 1000
+
+    limite_deslocamento_mm = (h / limite_relativo) * 1000 if limite_relativo > 0 else 0.0
+    deslocamento_ok = deslocamento_topo_mm <= limite_deslocamento_mm if limite_deslocamento_mm > 0 else False
+
+    return {
+        'deslocamento_topo_mm': deslocamento_topo_mm,
+        'limite_deslocamento_mm': limite_deslocamento_mm,
+        'deslocamento_ok': deslocamento_ok,
+        'ec_mpa': ec_mpa,
+        'inercia_m4': inercia,
+        'q_base_kN_m': q_base,
+        'q_uniforme_kN_m': q_uniforme
+    }
+
+def calcular_deslocamento_gravidade(h, area_base, forca_horizontal_resultante,
+                                    k_h=20000, limite_relativo=500):
+    """
+    Calcula o deslocamento horizontal do muro de gravidade (ELS) por translação rígida.
+
+    Modelo simplificado:
+    deslocamento = H / (k_h * A)
+
+    onde:
+    - H: resultante horizontal atuante (kN/m)
+    - k_h: coeficiente de reação horizontal do solo (kN/m³)
+    - A: área de base por metro de muro (m²)
+    """
+    if h <= 0 or area_base <= 0 or k_h <= 0:
+        return {
+            'deslocamento_topo_mm': 0.0,
+            'limite_deslocamento_mm': 0.0,
+            'deslocamento_ok': False,
+            'k_h_kN_m3': k_h
+        }
+
+    deslocamento_topo_m = max(forca_horizontal_resultante, 0.0) / (k_h * area_base)
+    deslocamento_topo_mm = deslocamento_topo_m * 1000
+
+    limite_deslocamento_mm = (h / limite_relativo) * 1000 if limite_relativo > 0 else 0.0
+    deslocamento_ok = deslocamento_topo_mm <= limite_deslocamento_mm if limite_deslocamento_mm > 0 else False
+
+    return {
+        'deslocamento_topo_mm': deslocamento_topo_mm,
+        'limite_deslocamento_mm': limite_deslocamento_mm,
+        'deslocamento_ok': deslocamento_ok,
+        'k_h_kN_m3': k_h
+    }
+
 # Quando clica no botao calcular chama essa função
 def calcular():
     try:
@@ -1035,6 +1151,7 @@ def calcular():
         pressao_adm = float(entry_pressao_adm.get())
         sobrecarga_mon = float(entry_sobrecarga_mon.get())
         gamma_agua = float(entry_gamma_agua.get())
+        modo_subpressao = var_subpressao.get()
         
         # Obter o valor da base máxima permitida
         base_max = float(entry_base_max.get())
@@ -1054,6 +1171,7 @@ def calcular():
         # Exemplo de resultados gerados
         volume_concreto_25 = (h + b_jus + b_mon) * d - d * d 
         volume_concreto_6 = 0  # Muro de flexão não usa esse concreto
+        volume_concreto_magro_base_flexao = (b_jus + b_mon) * ESPESSURA_CONCRETO_MAGRO_BASE_FLEXAO_M
         peso_aco_ca50 = as_final * 0.785 * (h + b_jus + b_mon) * 1.6 # Armadura de outra face e horizontal
 
         # Calcula o volume de carga e descarga
@@ -1076,6 +1194,11 @@ def calcular():
 
         label_concreto_6.config(text=f"{volume_concreto_6:.2f}")
         label_total_concreto_6.config(text=f"{volume_concreto_6 * (custo_concreto_6_mat + custo_concreto_6_mdo):.2f}")
+
+        label_concreto_magro_flex.config(text=f"{volume_concreto_magro_base_flexao:.2f}")
+        label_total_concreto_magro_flex.config(
+            text=f"{volume_concreto_magro_base_flexao * (custo_concreto_6_mat + custo_concreto_6_mdo):.2f}"
+        )
 
         label_aco_ca50.config(text=f"{peso_aco_ca50:.2f}")
         label_total_aco_ca50.config(text=f"{peso_aco_ca50 * (custo_aco_ca50_mat + custo_aco_ca50_mdo):.2f}")
@@ -1102,7 +1225,7 @@ def calcular():
         resultados_estabilidade = verificar_estabilidade_flexao(
             h, d, b_jus, b_mon, gamma_solo_sat, gamma_solo_sub, phi_estabilidade,
             gamma_concreto, nivel_agua, ka, pressao_adm,
-            c, fs_coesao, fs_atrito, sobrecarga_mon, base_max
+            c, fs_coesao, fs_atrito, sobrecarga_mon, base_max, fck, modo_subpressao
         )
         
         # Exibir os resultados da verificação de estabilidade
@@ -1113,6 +1236,9 @@ def calcular():
         print(f"Pressão Admissível OK: {resultados_estabilidade['pressao_adm_ok']}")
         print(f"Fator de Segurança ao Tombamento OK: {resultados_estabilidade['fs_tombamento_ok']}")
         print(f"Fator de Segurança ao Deslizamento OK: {resultados_estabilidade['fs_deslizamento_ok']}")
+        print(f"Deslocamento no topo (Flexão): {resultados_estabilidade['deslocamento_topo_mm']:.2f} mm")
+        print(f"Limite de deslocamento (Flexão): {resultados_estabilidade['limite_deslocamento_mm']:.2f} mm")
+        print(f"Deslocamento OK (Flexão): {resultados_estabilidade['deslocamento_ok']}")
         print(f"Base Teórica Necessária: {resultados_estabilidade['base_teorica']:.2f} m")
         print(f"Base Atual: {b_jus + b_mon:.2f} m")
         print(f"Base Máxima Permitida: {base_max:.2f} m")
@@ -1144,10 +1270,15 @@ def calcular():
         diametro_barra = 12.5
         espacamento_barra = 0.15
 
-        quantitativos_gravidade = gerar_quantitativos_gravidade(h, crista, b_gravidade, gamma_concreto, gamma_solo_sat, gamma_solo_sub, phi, c, pressao_adm, nivel_agua, fs_coesao, fs_atrito, ka, gamma_agua, sobrecarga_mon, custo_concreto_grav, custo_aco_grav, diametro_barra, espacamento_barra, base_max, inclinacao)
+        quantitativos_gravidade = gerar_quantitativos_gravidade(h, crista, b_gravidade, gamma_concreto, gamma_solo_sat, gamma_solo_sub, phi, c, pressao_adm, nivel_agua, fs_coesao, fs_atrito, k0, gamma_agua, sobrecarga_mon, custo_concreto_grav, custo_aco_grav, diametro_barra, espacamento_barra, base_max, inclinacao, modo_subpressao)
                                  
         
-        resultado_gravidade = calcular_muro_gravidade(h, crista, b_gravidade, gamma_concreto, gamma_solo_sat, gamma_solo_sub, phi, c, pressao_adm, nivel_agua, fs_coesao, fs_atrito, ka, gamma_agua, sobrecarga_mon, base_max, inclinacao)
+        resultado_gravidade = calcular_muro_gravidade(
+            h, crista, b_gravidade, gamma_concreto, gamma_solo_sat, gamma_solo_sub, phi, c, pressao_adm,
+            nivel_agua=nivel_agua, fs_coesao=fs_coesao, fs_atrito=fs_atrito, k0=k0,
+            base_max=base_max, gamma_agua=gamma_agua, sobrecarga_mon=sobrecarga_mon,
+            inclinacao=inclinacao, modo_subpressao=modo_subpressao
+        )
         
         # Exibir os resultados da verificação de estabilidade para o muro de gravidade (opcional)
         print("\n==== Resultados do Muro de Gravidade ====")
@@ -1155,6 +1286,9 @@ def calcular():
         print(f"Fator de Segurança ao Tombamento: {resultado_gravidade['fs_tombamento']:.2f}")
         print(f"Tensão Máxima na Base: {resultado_gravidade['tensao_max']:.2f} kN/m²")
         print(f"Tensão Mínima na Base: {resultado_gravidade['tensao_min']:.2f} kN/m²")
+        print(f"Deslocamento no topo (Gravidade): {resultado_gravidade['deslocamento_topo_mm']:.2f} mm")
+        print(f"Limite de deslocamento (Gravidade): {resultado_gravidade['limite_deslocamento_mm']:.2f} mm")
+        print(f"Deslocamento OK (Gravidade): {resultado_gravidade['deslocamento_ok']}")
         
         # Exibir informações sobre a base teórica para o muro de gravidade
         print(f"Base Teórica Necessária: {resultado_gravidade['base_teorica']:.2f} m")
@@ -1201,7 +1335,7 @@ def calcular():
         label_total_forma_grav.config(text=f"{quantitativos_gravidade['formas'] * (custo_forma_mat + custo_forma_mdo):.2f}")
 
         # Atualiza a soma de todos os metodos
-        label_total_total.config(text=f"{volume_concreto_25 * (custo_concreto_25_mat + custo_concreto_25_mdo) + volume_concreto_6 * (custo_concreto_6_mat + custo_concreto_6_mdo) + peso_aco_ca50 * (custo_aco_ca50_mat + custo_aco_ca50_mdo) + volume_aterro * (custo_aterro_mat + custo_aterro_mdo) + volume_corte * (custo_corte_mat + custo_corte_mdo) + volume_carga * (custo_carga_mat + custo_carga_mdo) + volume_descarga * (custo_descarga_mat + custo_descarga_mdo) + area_forma * (custo_forma_mat + custo_forma_mdo):.2f}")
+        label_total_total.config(text=f"{volume_concreto_25 * (custo_concreto_25_mat + custo_concreto_25_mdo) + volume_concreto_6 * (custo_concreto_6_mat + custo_concreto_6_mdo) + volume_concreto_magro_base_flexao * (custo_concreto_6_mat + custo_concreto_6_mdo) + peso_aco_ca50 * (custo_aco_ca50_mat + custo_aco_ca50_mdo) + volume_aterro * (custo_aterro_mat + custo_aterro_mdo) + volume_corte * (custo_corte_mat + custo_corte_mdo) + volume_carga * (custo_carga_mat + custo_carga_mdo) + volume_descarga * (custo_descarga_mat + custo_descarga_mdo) + area_forma * (custo_forma_mat + custo_forma_mdo):.2f}")
 
         label_total_total_grav.config(text=f"{quantitativos_gravidade['volume_concreto_25'] * (custo_concreto_25_mat + custo_concreto_25_mdo) + quantitativos_gravidade['volume_concreto_6'] * (custo_concreto_6_mat + custo_concreto_6_mdo) + quantitativos_gravidade['area_aco'] * (custo_aco_ca50_mat + custo_aco_ca50_mdo) + quantitativos_gravidade['volume_aterro'] * (custo_aterro_mat + custo_aterro_mdo) + quantitativos_gravidade['volume_corte'] * (custo_corte_mat + custo_corte_mdo) + quantitativos_gravidade['volume_descarga'] * (custo_carga_mat + custo_carga_mdo) + quantitativos_gravidade['formas'] * (custo_forma_mat + custo_forma_mdo):.2f}")
 
@@ -1236,6 +1370,17 @@ def calcular():
                 estavel_flexao = estavel_flexao + ", FSD"
                 flag_flexao = 1
 
+        if resultados_estabilidade['deslocamento_ok']:
+            if estavel_flexao == "OK":
+                estavel_flexao = "OK"
+        else:
+            if estavel_flexao == "OK":
+                estavel_flexao = " Verif. Desloc."
+                flag_flexao = 1
+            else:
+                estavel_flexao = estavel_flexao + ", Verif. Desloc."
+                flag_flexao = 1
+
         if resultado_gravidade['fs_deslizamento_ok']:
             estavel_gravidade = "OK"
         else:
@@ -1265,6 +1410,17 @@ def calcular():
                 estavel_gravidade = estavel_gravidade + " Verif. FST"
                 flag_gravidade = 1
 
+        if resultado_gravidade['deslocamento_ok']:
+            if estavel_gravidade == "OK":
+                estavel_gravidade = "OK"
+        else:
+            if estavel_gravidade == "OK":
+                estavel_gravidade = " Verif. Desloc."
+                flag_gravidade = 1
+            else:
+                estavel_gravidade = estavel_gravidade + ", Verif. Desloc."
+                flag_gravidade = 1
+
         estavel_flexao = f"Flexão: {estavel_flexao} ({flag_flexao})"
 
         estavel_gravidade = f"Gravidade: {estavel_gravidade}"
@@ -1273,10 +1429,30 @@ def calcular():
         label_estavel_flexao.config(text=estavel_flexao)
         label_estavel_gravidade.config(text=estavel_gravidade)
 
+        # ELS — deslocamento no topo (valores numéricos na interface)
+        df = resultados_estabilidade['deslocamento_topo_mm']
+        lf = resultados_estabilidade['limite_deslocamento_mm']
+        ok_f = resultados_estabilidade['deslocamento_ok']
+        q_b = resultados_estabilidade.get('els_q_base_kN_m', 0.0)
+        q_u = resultados_estabilidade.get('els_q_uniforme_kN_m', 0.0)
+        label_desloc_flexao.config(
+            text=f"δ={df:.2f} mm | lim={lf:.2f} mm | q_tri={q_b:.2f} q_sob={q_u:.2f} kN/m",
+            fg=("green" if ok_f else "red")
+        )
+
+        dg = resultado_gravidade['deslocamento_topo_mm']
+        lg = resultado_gravidade['limite_deslocamento_mm']
+        ok_g = resultado_gravidade['deslocamento_ok']
+        label_desloc_gravidade.config(
+            text=f"δ={dg:.2f} mm | lim={lg:.2f} mm (transl. rígida)",
+            fg=("green" if ok_g else "red")
+        )
+
         # ===== ATUALIZAR RESUMO DE CUSTOS E TEMPO =====
         # Calcular totais para o resumo
         total_flexao = (volume_concreto_25 * (custo_concreto_25_mat + custo_concreto_25_mdo) + 
                        volume_concreto_6 * (custo_concreto_6_mat + custo_concreto_6_mdo) + 
+                       volume_concreto_magro_base_flexao * (custo_concreto_6_mat + custo_concreto_6_mdo) + 
                        peso_aco_ca50 * (custo_aco_ca50_mat + custo_aco_ca50_mdo) + 
                        volume_aterro * (custo_aterro_mat + custo_aterro_mdo) + 
                        volume_corte * (custo_corte_mat + custo_corte_mdo) + 
@@ -1296,6 +1472,7 @@ def calcular():
         # Calcular tempo total de execução (em horas)
         tempo_flexao = (volume_concreto_25 * custo_concreto_25_tempo + 
                        volume_concreto_6 * custo_concreto_6_tempo + 
+                       volume_concreto_magro_base_flexao * custo_concreto_6_tempo + 
                        peso_aco_ca50 * custo_aco_ca50_tempo + 
                        volume_aterro * custo_aterro_tempo + 
                        volume_corte * custo_corte_tempo + 
@@ -1378,6 +1555,7 @@ def botao_plotar_muro_arrimo():
             base_max = float(campos['base_max'])
             nivel_agua = float(campos['nivel_agua'])
             sobrecarga_mon = float(campos['sobrecarga_mon'])
+            modo_subpressao = var_subpressao.get()
         except ValueError as e:
             messagebox.showerror("Erro", f"Erro ao converter valores numéricos: {str(e)}")
             return
@@ -1415,7 +1593,7 @@ def botao_plotar_muro_arrimo():
         resultados_estabilidade = verificar_estabilidade_flexao(
             h, d, b_jus, b_mon, gamma_solo_sat, gamma_solo_sub, phi,
             gamma_concreto, nivel_agua, ka, pressao_adm,
-            c, fs_coesao, fs_atrito, sobrecarga_mon, base_max
+            c, fs_coesao, fs_atrito, sobrecarga_mon, base_max, fck, modo_subpressao
         )
         
         # Plotar o muro
@@ -1645,7 +1823,12 @@ def plotar_muro_arrimo(b_jus, b_mon, h, d, as_final, gamma_solo_sat, gamma_solo_
         f"{'(OK)' if resultados_estabilidade['tensao_min'] > 0 else '(NÃO OK - RISCO DE LEVANTAMENTO)'}\n"
         f"5. Base Teórica Necessária: {base_teorica:.2f} m\n"
         f"6. Base Atual: {b_total:.2f} m\n"
-        f"7. Base Adequada: {'Sim' if base_ok else 'Não'}\n\n"
+        f"7. Base Adequada: {'Sim' if base_ok else 'Não'}\n"
+        f"8. ELS — Desloc. topo (flexão): {resultados_estabilidade['deslocamento_topo_mm']:.2f} mm "
+        f"(lim. h/500 = {resultados_estabilidade['limite_deslocamento_mm']:.2f} mm) "
+        f"{'OK' if resultados_estabilidade['deslocamento_ok'] else 'NÃO OK'}\n"
+        f"   Referência: q triangular (base)={resultados_estabilidade.get('els_q_base_kN_m', 0):.2f} kN/m, "
+        f"q uniforme (sobrecarga)={resultados_estabilidade.get('els_q_uniforme_kN_m', 0):.2f} kN/m\n\n"
 
         f"Relatório de Dimensionamento:\n"
         f"1. Diâmetro da Barra: {resultados_dimensionamento['dia_barra']:.2f} mm\n"
@@ -1738,22 +1921,35 @@ def plotar_muro_arrimo(b_jus, b_mon, h, d, as_final, gamma_solo_sat, gamma_solo_
         dados_tabela.append([f"{e_agua:.2f}", f"{braco_e_agua_PT:.2f}", f"{momento_e_agua_PT:.2f}", f"{braco_e_agua_CG:.2f}", f"{momento_e_agua_CG:.2f}"])
     
     # Empuxo de sobrecarga do solo
-    if 'e_sobre' in resultados_estabilidade:
-        nomes_cargas.append("Empuxo de Sobrecarga do Solo")
+    if 'e_sobre' in resultados_estabilidade and abs(e_sobre) > 1e-9:
+        nomes_cargas.append("Empuxo horizontal (sobrecarga)")
+        braco_e_sobre_PT = resultados_estabilidade.get('braco_e_sobre_PT', resultados_estabilidade.get('braco_e_sobre_CG', 0))
         braco_e_sobre_CG = resultados_estabilidade.get('braco_e_sobre_CG', 0)
+        momento_e_sobre_PT = e_sobre * braco_e_sobre_PT
         momento_e_sobre_CG = resultados_estabilidade.get('momento_e_sobre_CG', 0)
-        dados_tabela.append([f"{e_sobre:.2f}", f"-", f"-", f"{braco_e_sobre_CG:.2f}", f"{momento_e_sobre_CG:.2f}"])
+        dados_tabela.append([
+            f"{e_sobre:.2f}",
+            f"{braco_e_sobre_PT:.2f}",
+            f"{momento_e_sobre_PT:.2f}",
+            f"{braco_e_sobre_CG:.2f}",
+            f"{momento_e_sobre_CG:.2f}",
+        ])
 
-    # Momento devido a sobrecarga do solo
-    if 'momento_sobre' in resultados_estabilidade:
-        nomes_cargas.append("Momento sobrecarga do solo")
+    # Carga vertical estabilizante da sobrecarga a montante (q × largura do talão)
+    peso_sobre_tab = resultados_estabilidade.get('peso_sobre', 0)
+    if abs(peso_sobre_tab) > 1e-9:
+        nomes_cargas.append("Sobrecarga vertical (montante)")
         braco_sobre_PT = resultados_estabilidade.get('braco_sobre_PT', 0)
         momento_sobre_PT = resultados_estabilidade.get('momento_sobre_PT', 0)
         braco_sobre_CG = resultados_estabilidade.get('braco_sobre_CG', 0)
         momento_sobre_CG = resultados_estabilidade.get('momento_sobre_CG', 0)
-        dados_tabela.append([f"{momento_sobre:.2f}", f"{braco_sobre_PT:.2f}", f"{momento_sobre_PT:.2f}", f"{braco_sobre_CG:.2f}", f"{momento_sobre_CG:.2f}"])
-    
-    # 
+        dados_tabela.append([
+            f"{peso_sobre_tab:.2f}",
+            f"{braco_sobre_PT:.2f}",
+            f"{momento_sobre_PT:.2f}",
+            f"{braco_sobre_CG:.2f}",
+            f"{momento_sobre_CG:.2f}",
+        ])
     
     # Se não há todos os dados específicos, mostrar os momentos totais
     if not dados_tabela:
@@ -1789,8 +1985,9 @@ def plotar_muro_arrimo(b_jus, b_mon, h, d, as_final, gamma_solo_sat, gamma_solo_
     plt.show()
 
 
-def verificar_estabilidade_flexao(h, d, b_jus, b_mon, gamma_solo_sat, gamma_solo_sub, phi_estabilidade, gamma_concreto, 
-                                    nivel_agua, ka, pressao_adm, c, fs_coesao, fs_atrito, sobrecarga_mon, base_max=None):
+def verificar_estabilidade_flexao(h, d, b_jus, b_mon, gamma_solo_sat, gamma_solo_sub, phi_estabilidade, gamma_concreto,
+                                    nivel_agua, ka, pressao_adm, c, fs_coesao, fs_atrito, sobrecarga_mon,
+                                    base_max=None, fck=25, modo_subpressao="desconsiderar"):
     """
     Verifica a estabilidade do muro de arrimo considerando momentos em relação ao centro da base
     e a altura do muro, incluindo a coesão do solo.
@@ -1809,6 +2006,7 @@ def verificar_estabilidade_flexao(h, d, b_jus, b_mon, gamma_solo_sat, gamma_solo
     fs_coesao: fator de segurança à coesão
     fs_atrito: fator de segurança ao atrito
     base_max: base máxima permitida (m) [opcional]
+    fck: resistência característica do concreto (MPa)
     
     Retorna:
     dict com fatores de segurança distintos para coesão e atrito
@@ -1900,10 +2098,18 @@ def verificar_estabilidade_flexao(h, d, b_jus, b_mon, gamma_solo_sat, gamma_solo
 
     # Empuxo de sobrecarga do solo
     e_sobre = sobrecarga_mon * ka * h
-    braco_e_sobre_CG = h/2
+    braco_e_sobre_PT = h / 2.0  # Resultante do empuxo uniforme da sobrecarga (altura de aplicação)
+    braco_e_sobre_CG = braco_e_sobre_PT
     momento_e_sobre_CG = e_sobre * braco_e_sobre_CG
 
-    e0 = e0 + e_sobre 
+    e0 = e0 + e_sobre
+    # Braço da resultante horizontal total (inclui sobrecarga), para diagramas e verificações
+    braco_e0 = (
+        e0_solo_sat * braco_e0_solo_sat
+        + e0_solo_sub * braco_e0_solo_sub
+        + e0_agua * braco_e0_agua
+        + e_sobre * braco_e_sobre_PT
+    ) / e0 if e0 > 1e-9 else 0.0
 
     # CG total
     x_muro = (area_base*cg_base + area_talao*x_talao) / area_muro
@@ -1911,8 +2117,12 @@ def verificar_estabilidade_flexao(h, d, b_jus, b_mon, gamma_solo_sat, gamma_solo
     # CG da sobrecarga
     x_sobre = b_jus + (b_mon)/2
     
-    # Força normal total na base
-    forca_normal = peso_muro + peso_solo + peso_agua + peso_sobre # Colocar aqui a subpressão depois
+    # Força normal total na base (considerando subpressão quando aplicável)
+    forca_subpressao, braco_subpressao_PT = calcular_subpressao_base(
+        b_total, nivel_agua, gamma_agua=10.0, modo_subpressao=modo_subpressao
+    )
+    forca_normal = peso_muro + peso_solo + peso_agua + peso_sobre - forca_subpressao
+    braco_subpressao_CG = braco_subpressao_PT - cg_base
     
     # Isso permite que o usuário defina fatores de segurança diferentes 
     # para cada componente de resistência, 
@@ -1920,7 +2130,7 @@ def verificar_estabilidade_flexao(h, d, b_jus, b_mon, gamma_solo_sat, gamma_solo
 
     # Forças resistentes ao deslizamento
     resistencia_coesao = c * b_total
-    resistencia_atrito = forca_normal * math.tan(math.radians(phi_estabilidade))
+    resistencia_atrito = max(forca_normal, 0.0) * math.tan(math.radians(phi_estabilidade))
     
     # Fatores de segurança parciais
     fs_deslizamento_total = (resistencia_coesao / (e0 * fs_coesao)) + (resistencia_atrito / (e0 * fs_atrito))
@@ -1938,20 +2148,24 @@ def verificar_estabilidade_flexao(h, d, b_jus, b_mon, gamma_solo_sat, gamma_solo
     momento_agua = peso_agua * braco_agua_PT
 
     # Momento estabilizante total no CG da base
-    me_cg = momento_muro_cg + momento_solo_sat_cg + momento_solo_sub_cg + momento_agua_cg + momento_sobre_CG
+    momento_subpressao_cg = -forca_subpressao * braco_subpressao_CG
+    me_cg = momento_muro_cg + momento_solo_sat_cg + momento_solo_sub_cg + momento_agua_cg + momento_sobre_CG + momento_subpressao_cg
     
     # Momento estabilizante total
-    me = momento_muro + momento_solo_sat + momento_solo_sub + momento_agua + momento_sobre_PT
+    momento_subpressao_pt = -forca_subpressao * braco_subpressao_PT
+    me = momento_muro + momento_solo_sat + momento_solo_sub + momento_agua + momento_sobre_PT + momento_subpressao_pt
 
-    if sobrecarga_mon > 0:
-        mt = e_sobre * braco_e_sobre_CG + e0_solo_sat * braco_e0_solo_sat
+    # Momento desestabilizante em torno do PT (bordo de jusante): soma dos empuxos horizontais
+    mt = e_sobre * braco_e_sobre_PT
+    if nivel_agua > 0:
+        mt += e0_agua * braco_e0_agua + e0_solo_sub * braco_e0_solo_sub + e0_solo_sat * braco_e0_solo_sat
     else:
-        mt = e0 * braco_e0
-    
+        mt += e0_solo_sat * braco_e0_solo_sat
+
     # Fator de segurança ao tombamento
-    fs_tombamento = me / mt 
+    fs_tombamento = me / mt if abs(mt) > 1e-9 else 0.0
     
-    e = b_total / 2 - (me - mt) / forca_normal
+    e = b_total / 2 - (me - mt) / forca_normal if abs(forca_normal) > 1e-9 else 0.0
 
    # Tensões na base
     tensao_max = forca_normal / b_total + abs((me_cg - mt) / (b_total**2 / 6))
@@ -1971,6 +2185,19 @@ def verificar_estabilidade_flexao(h, d, b_jus, b_mon, gamma_solo_sat, gamma_solo
     base_atual_ok = b_total >= base_teorica
     base_max_ok = base_teorica <= base_max if base_max is not None else True
     base_ok = base_atual_ok and base_max_ok
+
+    # ELS - deslocamento horizontal no topo do fuste.
+    resultado_deslocamento = calcular_deslocamento_flexao(
+        h=h,
+        espessura_fuste=d,
+        fck=fck,
+        ka=ka,
+        gamma_solo_sat=gamma_solo_sat,
+        gamma_solo_sub=gamma_solo_sub,
+        nivel_agua=nivel_agua,
+        sobrecarga_mon=sobrecarga_mon,
+        limite_relativo=500
+    )
     
     return {
         'fs_tombamento': fs_tombamento,
@@ -1987,21 +2214,41 @@ def verificar_estabilidade_flexao(h, d, b_jus, b_mon, gamma_solo_sat, gamma_solo
         'base_ok': base_ok,
         'peso_muro': peso_muro,
         'x_muro': x_muro,
+        'braco_muro_PT': x_muro,
         'momento_muro': momento_muro,
+        'momento_muro_PT': momento_muro,
         'peso_solo': peso_solo,
         'peso_solo_sat': peso_solo_sat,
         'peso_solo_sub': peso_solo_sub,
         'peso_agua': peso_agua,
         'braco_solo_sat_PT': braco_solo_sat_PT,
+        'braco_solo_sat_CG': braco_solo_sat_PT - cg_base,
         'braco_solo_sub_PT': braco_solo_sub_PT,
         'braco_agua_PT': braco_agua_PT,
         'x_sobre': x_sobre,
         'momento_solo_sat': momento_solo_sat,
+        'momento_solo_PT': momento_solo_sat,
+        'momento_solo_CG': peso_solo_sat * (braco_solo_sat_PT - cg_base),
         'momento_solo_sub': momento_solo_sub,
+        'momento_solo_sub_PT': momento_solo_sub,
+        'braco_solo_sub_CG': braco_solo_sub_PT - cg_base,
+        'momento_solo_sub_CG': momento_solo_sub_cg,
         'momento_agua': momento_agua,
+        'momento_agua_PT': momento_agua,
+        'braco_agua_CG': braco_agua_PT - cg_base,
+        'momento_agua_CG': momento_agua_cg,
+        'braco_muro_CG': x_muro - cg_base,
+        'momento_muro_CG': momento_muro_cg,
+        'sobrecarga_mon': sobrecarga_mon,
+        'peso_sobre': peso_sobre,
+        'braco_sobre_PT': braco_sobre_PT,
+        'braco_sobre_CG': braco_sobre_CG,
         'momento_sobre_PT': momento_sobre_PT,
         'momento_sobre_CG': momento_sobre_CG,
         'momento_e_sobre_CG': momento_e_sobre_CG,
+        'e_sobre': e_sobre,
+        'braco_e_sobre_PT': braco_e_sobre_PT,
+        'braco_e_sobre_CG': braco_e_sobre_CG,
         'e0': e0,
         'e_agua': e0_agua,
         'braco_e0': braco_e0,
@@ -2009,10 +2256,19 @@ def verificar_estabilidade_flexao(h, d, b_jus, b_mon, gamma_solo_sat, gamma_solo
         'me': me,
         'me_cg': me_cg,
         'forca_normal': forca_normal,
+        'forca_subpressao': forca_subpressao,
+        'braco_subpressao_PT': braco_subpressao_PT,
+        'modo_subpressao': modo_subpressao,
         'cg_base': cg_base,
         'e0_agua': e0_agua,
         'e0_solo_sat': e0_solo_sat,
         'e0_solo_sub': e0_solo_sub,
+        'deslocamento_topo_mm': resultado_deslocamento['deslocamento_topo_mm'],
+        'limite_deslocamento_mm': resultado_deslocamento['limite_deslocamento_mm'],
+        'deslocamento_ok': resultado_deslocamento['deslocamento_ok'],
+        'els_ec_mpa': resultado_deslocamento['ec_mpa'],
+        'els_q_base_kN_m': resultado_deslocamento['q_base_kN_m'],
+        'els_q_uniforme_kN_m': resultado_deslocamento['q_uniforme_kN_m'],
     }
 
 def dimensionar_muro_gravidade(h, crista, b_mon, gamma_concreto, gamma_solo_sat, gamma_solo_sub, phi, c, pressao_adm, nivel_agua=0, fs_coesao=4, fs_atrito=2, k0=0.5, gamma_agua=10, sobrecarga_mon=0, inclinacao="montante"):
@@ -2337,7 +2593,7 @@ def dimensionar_muro_gravidade(h, crista, b_mon, gamma_concreto, gamma_solo_sat,
         'tensao_min': tensao_min
     }
 
-def verificar_estabilidade_muro_gravidade(dados_dimensionamento, h, crista, b_mon, gamma_concreto, gamma_solo_sat, gamma_solo_sub, phi, c, pressao_adm, nivel_agua=0, fs_coesao=4, fs_atrito=2, k0=0.5, base_max=None, gamma_agua=10, sobrecarga_mon=0, inclinacao="montante"):
+def verificar_estabilidade_muro_gravidade(dados_dimensionamento, h, crista, b_mon, gamma_concreto, gamma_solo_sat, gamma_solo_sub, phi, c, pressao_adm, nivel_agua=0, fs_coesao=4, fs_atrito=2, k0=0.5, base_max=None, gamma_agua=10, sobrecarga_mon=0, inclinacao="montante", modo_subpressao="desconsiderar"):
     """
     Verifica a estabilidade do muro de gravidade usando os dados de dimensionamento
     Parâmetros:
@@ -2526,6 +2782,17 @@ def verificar_estabilidade_muro_gravidade(dados_dimensionamento, h, crista, b_mo
     else:
         momento_est_total_PT = momento_muro_PT
 
+    # Subpressão na base (destabilizante)
+    forca_subpressao, braco_subpressao_PT = calcular_subpressao_base(
+        b_mon, nivel_agua, gamma_agua=gamma_agua, modo_subpressao=modo_subpressao
+    )
+    braco_subpressao_CG = braco_subpressao_PT - x_cg
+    momento_subpressao_PT = -forca_subpressao * braco_subpressao_PT
+    momento_subpressao_CG = -forca_subpressao * braco_subpressao_CG
+
+    peso_total -= forca_subpressao
+    momento_est_total_PT += momento_subpressao_PT
+
     if nivel_agua == 0:
         momento_e0 = -e0*braco_e0
     else:
@@ -2545,6 +2812,8 @@ def verificar_estabilidade_muro_gravidade(dados_dimensionamento, h, crista, b_mo
         momento_est_total_CG += momento_agua_CG
     if braco_muro_PT - x_cg >= 0:
         momento_est_total_CG += momento_muro_CG
+    if braco_subpressao_CG >= 0:
+        momento_est_total_CG += momento_subpressao_CG
     
     momento_dest_total_CG = 0
     if braco_muro_PT - x_cg <= 0:
@@ -2570,9 +2839,9 @@ def verificar_estabilidade_muro_gravidade(dados_dimensionamento, h, crista, b_mo
         momento_dest_total_CG += momento_sobrecarga_dest
         momento_dest_total_PT += momento_sobrecarga_dest
     
-    momento_CG = momento_solo_sat_CG + momento_solo_sub_CG + momento_agua_CG + momento_muro_CG + momento_e0 + momento_sobrecarga_dest
+    momento_CG = momento_solo_sat_CG + momento_solo_sub_CG + momento_agua_CG + momento_muro_CG + momento_subpressao_CG + momento_e0 + momento_sobrecarga_dest
 
-    FST = abs(momento_est_total_PT/momento_dest_total_PT)
+    FST = abs(momento_est_total_PT/momento_dest_total_PT) if abs(momento_dest_total_PT) > 1e-9 else 0.0
 
     print(tensao_max, tensao_min, peso_total, b_mon, momento_CG)
 
@@ -2583,7 +2852,8 @@ def verificar_estabilidade_muro_gravidade(dados_dimensionamento, h, crista, b_mo
         tensao_max = dados_dimensionamento['tensao_max']
         tensao_min = dados_dimensionamento['tensao_min']
     
-    fs_deslizamento = c * b_mon / (e0 * fs_coesao) + (peso_muro + peso_solo + peso_agua)*math.tan(math.radians(phi)) / (e0 * fs_atrito)
+    normal_efetiva = max(peso_total, 0.0)
+    fs_deslizamento = c * b_mon / (e0 * fs_coesao) + (normal_efetiva)*math.tan(math.radians(phi)) / (e0 * fs_atrito)
     fs_deslizamento_ok = fs_deslizamento >= 1.0  # Valor mínimo recomendado pela NBR 11682
 
     fs_tombamento = FST
@@ -2604,6 +2874,15 @@ def verificar_estabilidade_muro_gravidade(dados_dimensionamento, h, crista, b_mo
         base_max_ok = base_teorica <= base_max
     
     base_ok = base_atual_ok and base_max_ok
+
+    # ELS - deslocamento horizontal por translação rígida do bloco.
+    resultado_deslocamento = calcular_deslocamento_gravidade(
+        h=h,
+        area_base=b_mon * 1.0,
+        forca_horizontal_resultante=e0,
+        k_h=20000,
+        limite_relativo=500
+    )
     
     return {
         'fs_deslizamento': fs_deslizamento,
@@ -2619,10 +2898,13 @@ def verificar_estabilidade_muro_gravidade(dados_dimensionamento, h, crista, b_mo
         'base_ok': base_ok,
         'base_teorica_pressao': base_teorica_pressao,
         'base_teorica_tombamento': base_teorica_tombamento,
-        'base_teorica_deslizamento': base_teorica_deslizamento
+        'base_teorica_deslizamento': base_teorica_deslizamento,
+        'deslocamento_topo_mm': resultado_deslocamento['deslocamento_topo_mm'],
+        'limite_deslocamento_mm': resultado_deslocamento['limite_deslocamento_mm'],
+        'deslocamento_ok': resultado_deslocamento['deslocamento_ok']
     }
 
-def calcular_muro_gravidade(h, crista, b_mon, gamma_concreto, gamma_solo_sat, gamma_solo_sub, phi, c, pressao_adm, nivel_agua=0, fs_coesao=4, fs_atrito=2, k0=0.5, base_max=None, gamma_agua=10, sobrecarga_mon=0, inclinacao="montante"):
+def calcular_muro_gravidade(h, crista, b_mon, gamma_concreto, gamma_solo_sat, gamma_solo_sub, phi, c, pressao_adm, nivel_agua=0, fs_coesao=4, fs_atrito=2, k0=0.5, base_max=None, gamma_agua=10, sobrecarga_mon=0, inclinacao="montante", modo_subpressao="desconsiderar"):
     """
     Função principal que combina dimensionamento e verificação do muro de gravidade
     
@@ -2652,7 +2934,7 @@ def calcular_muro_gravidade(h, crista, b_mon, gamma_concreto, gamma_solo_sat, ga
     dados_dimensionamento = dimensionar_muro_gravidade(h, crista, b_mon, gamma_concreto, gamma_solo_sat, gamma_solo_sub, phi, c, pressao_adm, nivel_agua, fs_coesao, fs_atrito, k0, gamma_agua, sobrecarga_mon, inclinacao)
     
     # Realizar verificações
-    dados_verificacao = verificar_estabilidade_muro_gravidade(dados_dimensionamento, h, crista, b_mon, gamma_concreto, gamma_solo_sat, gamma_solo_sub, phi, c, pressao_adm, nivel_agua, fs_coesao, fs_atrito, k0, base_max, gamma_agua, sobrecarga_mon, inclinacao)
+    dados_verificacao = verificar_estabilidade_muro_gravidade(dados_dimensionamento, h, crista, b_mon, gamma_concreto, gamma_solo_sat, gamma_solo_sub, phi, c, pressao_adm, nivel_agua, fs_coesao, fs_atrito, k0, base_max, gamma_agua, sobrecarga_mon, inclinacao, modo_subpressao)
     
     # Combinar todos os resultados
     resultado_completo = {
@@ -2677,6 +2959,9 @@ def calcular_muro_gravidade(h, crista, b_mon, gamma_concreto, gamma_solo_sat, ga
         'base_atual_ok': dados_verificacao['base_atual_ok'],
         'base_max_ok': dados_verificacao['base_max_ok'],
         'base_ok': dados_verificacao['base_ok'],
+        'deslocamento_topo_mm': dados_verificacao['deslocamento_topo_mm'],
+        'limite_deslocamento_mm': dados_verificacao['limite_deslocamento_mm'],
+        'deslocamento_ok': dados_verificacao['deslocamento_ok'],
     }
     
     return resultado_completo
@@ -3085,6 +3370,598 @@ def atualizar_info_custos():
     except:
         label_info_custos.config(text="Clique para editar") 
 
+
+def _parse_float_label(texto):
+    texto = str(texto).replace("R$", "").replace("h", "").replace(",", ".").strip()
+    return float(texto) if texto else 0.0
+
+
+def _parse_deslocamento(label_text):
+    # Espera texto no formato: "δ=1.23 mm | ..."
+    try:
+        parte = str(label_text).split("|")[0]
+        return float(parte.split("=")[1].replace("mm", "").strip())
+    except Exception:
+        return 0.0
+
+
+def _coletar_resultados_resumo():
+    return {
+        "custo_flexao": _parse_float_label(label_custo_total_flexao.cget("text")),
+        "custo_gravidade": _parse_float_label(label_custo_total_gravidade.cget("text")),
+        "tempo_flexao_h": _parse_float_label(label_tempo_total_flexao.cget("text")),
+        "tempo_gravidade_h": _parse_float_label(label_tempo_total_gravidade.cget("text")),
+        "desloc_flexao_mm": _parse_deslocamento(label_desloc_flexao.cget("text")),
+        "desloc_gravidade_mm": _parse_deslocamento(label_desloc_gravidade.cget("text")),
+        "estab_flexao": label_estavel_flexao.cget("text"),
+        "estab_gravidade": label_estavel_gravidade.cget("text"),
+    }
+
+
+def _gerar_serie(inicio, fim, passo):
+    if passo <= 0:
+        raise ValueError("O passo deve ser maior que zero.")
+    if fim < inicio:
+        raise ValueError("O valor final deve ser maior ou igual ao inicial.")
+
+    serie = []
+    valor = inicio
+    while valor <= fim + 1e-9:
+        serie.append(round(valor, 6))
+        valor += passo
+    return serie
+
+
+def _motivo_falha_linha_parametrica(linha):
+    m = str(linha.get("motivo_nao_calculado", "")).strip()
+    if m:
+        return m
+    return str(linha.get("observacao", "")).strip()
+
+
+def _mostrar_tabela_parametrica(titulo, nome_arquivo, linhas):
+    janela = tk.Toplevel()
+    janela.title(titulo)
+    janela.geometry("1320x680")
+
+    tk.Label(
+        janela,
+        text=f"Resultado salvo em: {nome_arquivo}",
+        font=("Arial", 10, "bold"),
+        fg="darkgreen"
+    ).pack(anchor="w", padx=10, pady=(10, 5))
+
+    frame_texto = tk.Frame(janela)
+    frame_texto.pack(fill="both", expand=True, padx=10, pady=10)
+
+    scrollbar = tk.Scrollbar(frame_texto)
+    scrollbar.pack(side="right", fill="y")
+
+    texto = tk.Text(frame_texto, wrap="none", yscrollcommand=scrollbar.set, font=("Consolas", 9))
+    texto.pack(side="left", fill="both", expand=True)
+    scrollbar.config(command=texto.yview)
+
+    cabecalho = (
+        f"{'Var':<10} {'BaseF(m)':>10} {'BaseG(m)':>10} "
+        f"{'CFlex(R$)':>12} {'CGrav(R$)':>12} {'TFlex(h)':>10} {'TGrav(h)':>10} "
+        f"{'dFlex(mm)':>10} {'dGrav(mm)':>10} {'Est.F':>8} {'Est.G':>8} "
+        f"{'Obs.':<28} {'Motivo (não calculado)':<52}\n"
+    )
+    texto.insert(tk.END, cabecalho)
+    texto.insert(tk.END, "-" * 190 + "\n")
+
+    for linha in linhas:
+        est_flexao = "Sim" if "OK" in str(linha["estab_flexao"]) else "Nao"
+        est_gravidade = "Sim" if "OK" in str(linha["estab_gravidade"]) else "Nao"
+        obs = str(linha.get("observacao", "")).strip()
+        motivo = _motivo_falha_linha_parametrica(linha)
+        sem_numerico = bool(motivo)
+        if sem_numerico:
+            texto.insert(
+                tk.END,
+                f"{linha['variavel_valor']:<10.3f} "
+                f"{linha.get('base_flexao_total', 0.0):>10.3f} "
+                f"{linha.get('base_gravidade', 0.0):>10.3f} "
+                f"{'-':>12} {'-':>12} {'-':>10} {'-':>10} {'-':>10} {'-':>10} "
+                f"{est_flexao:>8} "
+                f"{est_gravidade:>8} "
+                f"{obs:<28} "
+                f"{motivo:<52}\n"
+            )
+            continue
+        texto.insert(
+            tk.END,
+            f"{linha['variavel_valor']:<10.3f} "
+            f"{linha.get('base_flexao_total', 0.0):>10.3f} "
+            f"{linha.get('base_gravidade', 0.0):>10.3f} "
+            f"{linha['custo_flexao']:>12.2f} "
+            f"{linha['custo_gravidade']:>12.2f} "
+            f"{linha['tempo_flexao_h']:>10.2f} "
+            f"{linha['tempo_gravidade_h']:>10.2f} "
+            f"{linha['desloc_flexao_mm']:>10.2f} "
+            f"{linha['desloc_gravidade_mm']:>10.2f} "
+            f"{est_flexao:>8} "
+            f"{est_gravidade:>8} "
+            f"{obs:<28} "
+            f"{'':<52}\n"
+        )
+
+    texto.config(state="disabled")
+
+
+def _plotar_parametrico(x, y1, y2, xlabel, ylabel, titulo, legenda1, legenda2):
+    plt.figure(figsize=(9, 5))
+    plt.plot(x, y1, marker="o", label=legenda1)
+    plt.plot(x, y2, marker="s", label=legenda2)
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.title(titulo)
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+
+def _observacao_falha_parametrico(base_flex_ok, grav_ok, base_min, base_max_busca, base_passo, b_jus_fixo):
+    """Texto explicando por que não houve resultado numérico completo na linha."""
+    if base_flex_ok and grav_ok:
+        return ""
+    partes = []
+    if not base_flex_ok:
+        partes.append(
+            f"Flexão: sem estabilidade (OK) ao variar só largura a montante entre {base_min:g} e {base_max_busca:g} m "
+            f"(passo {base_passo:g} m); jusante fixo em {b_jus_fixo:g} m."
+        )
+    if not grav_ok:
+        partes.append(
+            f"Gravidade: sem estabilidade (OK) para base entre {base_min:g} e {base_max_busca:g} m (passo {base_passo:g} m)."
+        )
+    return " ".join(partes)
+
+
+def executar_estudo_parametrico(tipo_estudo, inicio, fim, passo_variavel, base_min, base_max_busca, base_passo):
+    """
+    Executa estudo paramétrico focado em:
+    - Altura do muro (H): em cada ponto fixa-se d = H/10 (espessura proporcional à altura).
+    - Espessura/altura útil do muro de flexão (d): varia d mantendo H o da interface.
+
+    Muro de flexão: busca-se a menor largura a montante estável variando somente essa dimensão;
+    a largura a jusante permanece a informada na interface.
+
+    Muro de gravidade: mantém-se a varredura da base entre os limites informados (comportamento anterior).
+    """
+    try:
+        inicio = float(inicio)
+        fim = float(fim)
+        passo_variavel = float(passo_variavel)
+        base_min = float(base_min)
+        base_max_busca = float(base_max_busca)
+        base_passo = float(base_passo)
+        valores = _gerar_serie(inicio, fim, passo_variavel)
+
+        # Salva estado original
+        h_original = float(entry_h.get())
+        d_original = float(entry_d.get())
+        b_jus_original = float(entry_b_jus.get())
+        b_mon_original = float(entry_b_mon.get())
+        b_grav_original = float(entry_b_gravidade.get())
+
+        if base_min <= 0:
+            raise ValueError("Base mínima deve ser > 0.")
+        if base_max_busca <= 0:
+            raise ValueError("Base máxima de busca deve ser > 0.")
+        if base_passo <= 0:
+            raise ValueError("Passo de base deve ser > 0.")
+        if base_max_busca < base_min:
+            raise ValueError("Base máxima deve ser maior ou igual à base mínima.")
+
+        linhas = []
+        for valor in valores:
+            entry_b_gravidade.delete(0, tk.END)
+            entry_b_gravidade.insert(0, f"{b_grav_original:.6g}")
+
+            if tipo_estudo == "altura":
+                entry_h.delete(0, tk.END)
+                entry_h.insert(0, f"{valor:.6g}")
+                d_de_h = valor / 10.0
+                entry_d.delete(0, tk.END)
+                entry_d.insert(0, f"{d_de_h:.6g}")
+            elif tipo_estudo == "espessura":
+                entry_d.delete(0, tk.END)
+                entry_d.insert(0, f"{valor:.6g}")
+            else:
+                raise ValueError("Tipo de estudo inválido.")
+
+            # 1) Muro de flexão: menor largura a montante com estabilidade ("OK").
+            #    Somente b montante varia na série [base_min, base_max_busca]; jusante fixo na interface.
+            base_flexao_total_otim = None
+            b_jus_otim = None
+            b_mon_otim = None
+            b_jus_fixo = b_jus_original
+            for b_mon in _gerar_serie(base_min, base_max_busca, base_passo):
+                if b_mon <= 0 or b_jus_fixo <= 0:
+                    continue
+                entry_b_jus.delete(0, tk.END)
+                entry_b_jus.insert(0, f"{b_jus_fixo:.6g}")
+                entry_b_mon.delete(0, tk.END)
+                entry_b_mon.insert(0, f"{b_mon:.6g}")
+
+                try:
+                    calcular()
+                except Exception:
+                    continue
+
+                if "OK" in str(label_estavel_flexao.cget("text")):
+                    base_flexao_total_otim = b_jus_fixo + b_mon
+                    b_jus_otim = b_jus_fixo
+                    b_mon_otim = b_mon
+                    break
+
+            # 2) Otimiza base do muro de gravidade: menor base que atende estabilidade ("OK").
+            base_grav_otim = None
+            entry_b_gravidade.delete(0, tk.END)
+            # (mantém a flexão otimizada; gravidade será ajustada abaixo)
+            for base_g in _gerar_serie(base_min, base_max_busca, base_passo):
+                entry_b_gravidade.delete(0, tk.END)
+                entry_b_gravidade.insert(0, f"{base_g:.6g}")
+
+                try:
+                    calcular()
+                except Exception:
+                    continue
+
+                if "OK" in str(label_estavel_gravidade.cget("text")):
+                    base_grav_otim = base_g
+                    break
+
+            # Se não conseguiu estabilidade onde necessário, registra a falha para não "sumir" da tabela.
+            flex_ok = base_flexao_total_otim is not None
+            grav_ok = base_grav_otim is not None
+            if not flex_ok or not grav_ok:
+                motivo = _observacao_falha_parametrico(flex_ok, grav_ok, base_min, base_max_busca, base_passo, b_jus_fixo)
+                linhas.append({
+                    "tipo_estudo": tipo_estudo,
+                    "variavel_valor": valor,
+                    "base_flexao_total": base_flexao_total_otim if base_flexao_total_otim is not None else 0.0,
+                    "base_gravidade": base_grav_otim if base_grav_otim is not None else 0.0,
+                    "custo_flexao": 0.0,
+                    "custo_gravidade": 0.0,
+                    "tempo_flexao_h": 0.0,
+                    "tempo_gravidade_h": 0.0,
+                    "desloc_flexao_mm": 0.0,
+                    "desloc_gravidade_mm": 0.0,
+                    "estab_flexao": "NAO_CONVERGIU_ATE_BASE_MAX",
+                    "estab_gravidade": "NAO_CONVERGIU_ATE_BASE_MAX",
+                    "observacao": "",
+                    "motivo_nao_calculado": motivo,
+                })
+                continue
+
+            # Garante que o cenário final está definido com as bases ótimas encontradas.
+            entry_b_jus.delete(0, tk.END)
+            entry_b_jus.insert(0, f"{b_jus_otim:.6g}")
+            entry_b_mon.delete(0, tk.END)
+            entry_b_mon.insert(0, f"{b_mon_otim:.6g}")
+            entry_b_gravidade.delete(0, tk.END)
+            entry_b_gravidade.insert(0, f"{base_grav_otim:.6g}")
+
+            calcular()
+            r = _coletar_resultados_resumo()
+            linhas.append({
+                "tipo_estudo": tipo_estudo,
+                "variavel_valor": valor,
+                "base_flexao_total": float(entry_b_jus.get()) + float(entry_b_mon.get()),
+                "base_gravidade": float(entry_b_gravidade.get()),
+                "custo_flexao": r["custo_flexao"],
+                "custo_gravidade": r["custo_gravidade"],
+                "tempo_flexao_h": r["tempo_flexao_h"],
+                "tempo_gravidade_h": r["tempo_gravidade_h"],
+                "desloc_flexao_mm": r["desloc_flexao_mm"],
+                "desloc_gravidade_mm": r["desloc_gravidade_mm"],
+                "estab_flexao": r["estab_flexao"],
+                "estab_gravidade": r["estab_gravidade"],
+                "observacao": "",
+                "motivo_nao_calculado": "",
+            })
+
+        # Restaura estado original
+        entry_h.delete(0, tk.END)
+        entry_h.insert(0, f"{h_original:.6g}")
+        entry_d.delete(0, tk.END)
+        entry_d.insert(0, f"{d_original:.6g}")
+        entry_b_jus.delete(0, tk.END)
+        entry_b_jus.insert(0, f"{b_jus_original:.6g}")
+        entry_b_mon.delete(0, tk.END)
+        entry_b_mon.insert(0, f"{b_mon_original:.6g}")
+        entry_b_gravidade.delete(0, tk.END)
+        entry_b_gravidade.insert(0, f"{b_grav_original:.6g}")
+        calcular()
+
+        sufixo = "altura" if tipo_estudo == "altura" else "espessura"
+        nome_arquivo = f"estudo_parametrico_{sufixo}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        caminho_csv = os.path.join(os.path.dirname(os.path.abspath(__file__)), nome_arquivo)
+
+        campos_csv = [
+            "tipo_estudo", "variavel_valor",
+            "base_flexao_total", "base_gravidade",
+            "custo_flexao", "custo_gravidade",
+            "tempo_flexao_h", "tempo_gravidade_h",
+            "desloc_flexao_mm", "desloc_gravidade_mm",
+            "estab_flexao", "estab_gravidade",
+            "observacao",
+            "motivo_nao_calculado",
+        ]
+
+        with open(caminho_csv, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=campos_csv, delimiter=";")
+            writer.writeheader()
+            writer.writerows(linhas)
+
+        if not linhas:
+            messagebox.showwarning(
+                "Sem soluções estáveis",
+                "Não foi possível encontrar uma combinação estável (flexão e gravidade) dentro dos limites de base e passo informados."
+            )
+            return
+
+        titulo_tabela = "Estudo Paramétrico (Base Otimizada) por Altura" if tipo_estudo == "altura" else "Estudo Paramétrico (Base Otimizada) por Espessura"
+        _mostrar_tabela_parametrica(titulo_tabela, nome_arquivo, linhas)
+
+        linhas_plot = [l for l in linhas if not _motivo_falha_linha_parametrica(l)]
+        if linhas_plot:
+            eixo_x = [linha["variavel_valor"] for linha in linhas_plot]
+            custos_f = [linha["custo_flexao"] for linha in linhas_plot]
+            custos_g = [linha["custo_gravidade"] for linha in linhas_plot]
+            xlabel = "Altura H (m)" if tipo_estudo == "altura" else "Espessura d (m)"
+            _plotar_parametrico(
+                eixo_x,
+                custos_f,
+                custos_g,
+                xlabel=xlabel,
+                ylabel="Custo total (R$/m)",
+                titulo=f"{titulo_tabela} - Custo",
+                legenda1="Muro de Flexão",
+                legenda2="Muro de Gravidade",
+            )
+
+    except ValueError as e:
+        messagebox.showerror("Erro", f"Parâmetros inválidos: {e}")
+    except Exception as e:
+        messagebox.showerror("Erro", f"Falha no estudo paramétrico:\n{e}")
+
+
+def abrir_estudo_parametrico_popup():
+    janela = tk.Toplevel()
+    janela.title("Configurar Estudo Paramétrico")
+    janela.resizable(False, False)
+
+    tk.Label(janela, text="Tipo de estudo:").grid(row=0, column=0, padx=10, pady=8, sticky="e")
+    tipo_var = tk.StringVar(value="altura")
+    combo_tipo = ttk.Combobox(
+        janela,
+        textvariable=tipo_var,
+        state="readonly",
+        values=["altura", "espessura"],
+        width=18
+    )
+    combo_tipo.grid(row=0, column=1, padx=10, pady=8)
+
+    tk.Label(janela, text="Valor inicial:").grid(row=1, column=0, padx=10, pady=5, sticky="e")
+    entry_inicio = tk.Entry(janela, width=20)
+    entry_inicio.insert(0, "3.0")
+    entry_inicio.grid(row=1, column=1, padx=10, pady=5)
+
+    tk.Label(janela, text="Valor final:").grid(row=2, column=0, padx=10, pady=5, sticky="e")
+    entry_fim = tk.Entry(janela, width=20)
+    entry_fim.insert(0, "8.0")
+    entry_fim.grid(row=2, column=1, padx=10, pady=5)
+
+    tk.Label(janela, text="Passo:").grid(row=3, column=0, padx=10, pady=5, sticky="e")
+    entry_passo = tk.Entry(janela, width=20)
+    entry_passo.insert(0, "0.5")
+    entry_passo.grid(row=3, column=1, padx=10, pady=5)
+
+    tk.Label(janela, text="Base mínima (m):").grid(row=4, column=0, padx=10, pady=5, sticky="e")
+    entry_base_min = tk.Entry(janela, width=20)
+    entry_base_min.insert(0, "0.2")
+    entry_base_min.grid(row=4, column=1, padx=10, pady=5)
+
+    tk.Label(janela, text="Base máxima da busca (m):").grid(row=5, column=0, padx=10, pady=5, sticky="e")
+    entry_base_max_busca = tk.Entry(janela, width=20)
+    entry_base_max_busca.insert(0, entry_base_max.get())
+    entry_base_max_busca.grid(row=5, column=1, padx=10, pady=5)
+
+    tk.Label(janela, text="Passo da busca de base (m):").grid(row=6, column=0, padx=10, pady=5, sticky="e")
+    entry_base_passo = tk.Entry(janela, width=20)
+    entry_base_passo.insert(0, "0.1")
+    entry_base_passo.grid(row=6, column=1, padx=10, pady=5)
+
+    tk.Label(
+        janela,
+        text=(
+            "Altura: varia H e adota d = H/10 (espessura do fuste proporcional à altura).\n"
+            "Espessura: varia d mantendo H conforme a interface.\n"
+            "Para cada ponto, busca a menor largura a montante estável (jusante fixo) no muro de flexão\n"
+            "e a menor base estável no muro de gravidade. Limites mín./máx. da busca aplicam-se à largura montante (flexão) e à base (gravidade)."
+        ),
+        justify="left",
+        fg="gray30"
+    ).grid(row=7, column=0, columnspan=2, padx=10, pady=(0, 8), sticky="w")
+
+    def executar():
+        executar_estudo_parametrico(
+            tipo_var.get(),
+            entry_inicio.get(),
+            entry_fim.get(),
+            entry_passo.get(),
+            entry_base_min.get(),
+            entry_base_max_busca.get(),
+            entry_base_passo.get(),
+        )
+        janela.destroy()
+
+    frame_btn = tk.Frame(janela)
+    frame_btn.grid(row=8, column=0, columnspan=2, pady=10)
+    tk.Button(frame_btn, text="Executar", command=executar, bg="lightgreen").pack(side="left", padx=8)
+    tk.Button(frame_btn, text="Cancelar", command=janela.destroy).pack(side="left", padx=8)
+
+
+def executar_analise_sensibilidade():
+    """
+    Varia uma variável por vez e compara os resultados dos dois tipos de muro.
+    Também salva o resultado em CSV para uso em artigo.
+    """
+    try:
+        # Garante que o cenário de referência esteja atualizado
+        calcular()
+
+        variaveis = [
+            ("h", "Altura do muro (m)", entry_h),
+            ("b_jus", "Base jusante flexão (m)", entry_b_jus),
+            ("b_mon", "Base montante flexão (m)", entry_b_mon),
+            ("d", "Altura útil d (m)", entry_d),
+            ("b_gravidade", "Base muro gravidade (m)", entry_b_gravidade),
+            ("crista", "Largura da crista (m)", entry_crista),
+            ("gamma_solo_sat", "Peso esp. solo saturado (kN/m³)", entry_gamma_solo_sat),
+            ("gamma_solo_sub", "Peso esp. solo submerso (kN/m³)", entry_gamma_solo_sub),
+            ("gamma_concreto", "Peso esp. concreto (kN/m³)", entry_gamma_concreto),
+            ("phi", "Angulo de atrito (graus)", entry_phi_estabilidade),
+            ("ka", "Coef. empuxo ativo Ka", entry_ka),
+            ("k0", "Coef. empuxo repouso K0", entry_k0),
+            ("pressao_adm", "Pressao admissivel (kN/m²)", entry_pressao_adm),
+            ("base_max", "Base maxima permitida (m)", entry_base_max),
+            ("nivel_agua", "Nivel de agua (m)", entry_nivel_agua),
+            ("sobrecarga_mon", "Sobrecarga montante (kN/m²)", entry_sobrecarga_mon),
+            ("coesao", "Coesao do solo (kN/m²)", entry_coesao),
+        ]
+
+        def coletar_resultados():
+            return _coletar_resultados_resumo()
+
+        def gerar_valores_variacao(valor_base):
+            # Regra: ±20% para valores não nulos, e patamares absolutos para valor base 0
+            if abs(valor_base) < 1e-9:
+                return [0.0, 0.5, 1.0, 1.5, 2.0]
+
+            fatores = [0.8, 0.9, 1.0, 1.1, 1.2]
+            valores = [valor_base * f for f in fatores]
+            # Mantém parâmetros fisicamente positivos quando a base é positiva
+            if valor_base > 0:
+                valores = [max(v, 1e-6) for v in valores]
+            return valores
+
+        baseline = coletar_resultados()
+        linhas = []
+
+        for var_id, nome_var, entry in variaveis:
+            valor_original = float(entry.get())
+            valores_teste = gerar_valores_variacao(valor_original)
+
+            for valor_teste in valores_teste:
+                entry.delete(0, tk.END)
+                entry.insert(0, f"{valor_teste:.6g}")
+                calcular()
+                resultado = coletar_resultados()
+
+                linhas.append({
+                    "variavel": var_id,
+                    "descricao": nome_var,
+                    "valor_base": valor_original,
+                    "valor_teste": valor_teste,
+                    "delta_percentual": ((valor_teste / valor_original - 1.0) * 100.0) if abs(valor_original) > 1e-9 else 0.0,
+                    "custo_flexao": resultado["custo_flexao"],
+                    "custo_gravidade": resultado["custo_gravidade"],
+                    "tempo_flexao_h": resultado["tempo_flexao_h"],
+                    "tempo_gravidade_h": resultado["tempo_gravidade_h"],
+                    "desloc_flexao_mm": resultado["desloc_flexao_mm"],
+                    "desloc_gravidade_mm": resultado["desloc_gravidade_mm"],
+                    "estab_flexao": resultado["estab_flexao"],
+                    "estab_gravidade": resultado["estab_gravidade"],
+                    "delta_custo_flexao_percent": ((resultado["custo_flexao"] / baseline["custo_flexao"] - 1.0) * 100.0) if baseline["custo_flexao"] > 0 else 0.0,
+                    "delta_custo_gravidade_percent": ((resultado["custo_gravidade"] / baseline["custo_gravidade"] - 1.0) * 100.0) if baseline["custo_gravidade"] > 0 else 0.0,
+                    "delta_tempo_flexao_percent": ((resultado["tempo_flexao_h"] / baseline["tempo_flexao_h"] - 1.0) * 100.0) if baseline["tempo_flexao_h"] > 0 else 0.0,
+                    "delta_tempo_gravidade_percent": ((resultado["tempo_gravidade_h"] / baseline["tempo_gravidade_h"] - 1.0) * 100.0) if baseline["tempo_gravidade_h"] > 0 else 0.0,
+                    "delta_desloc_flexao_percent": ((resultado["desloc_flexao_mm"] / baseline["desloc_flexao_mm"] - 1.0) * 100.0) if baseline["desloc_flexao_mm"] > 0 else 0.0,
+                    "delta_desloc_gravidade_percent": ((resultado["desloc_gravidade_mm"] / baseline["desloc_gravidade_mm"] - 1.0) * 100.0) if baseline["desloc_gravidade_mm"] > 0 else 0.0,
+                })
+
+            # Restaura valor original antes de ir para a próxima variável
+            entry.delete(0, tk.END)
+            entry.insert(0, f"{valor_original:.6g}")
+            calcular()
+
+        # Salva CSV para uso externo (artigo)
+        nome_arquivo = f"analise_sensibilidade_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        caminho_csv = os.path.join(os.path.dirname(os.path.abspath(__file__)), nome_arquivo)
+
+        campos_csv = [
+            "variavel", "descricao", "valor_base", "valor_teste", "delta_percentual",
+            "custo_flexao", "custo_gravidade", "tempo_flexao_h", "tempo_gravidade_h",
+            "desloc_flexao_mm", "desloc_gravidade_mm", "estab_flexao", "estab_gravidade",
+            "delta_custo_flexao_percent", "delta_custo_gravidade_percent",
+            "delta_tempo_flexao_percent", "delta_tempo_gravidade_percent",
+            "delta_desloc_flexao_percent", "delta_desloc_gravidade_percent"
+        ]
+
+        with open(caminho_csv, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=campos_csv, delimiter=";")
+            writer.writeheader()
+            writer.writerows(linhas)
+
+        # Exibe tabela resumida na interface
+        janela = tk.Toplevel()
+        janela.title("Analise de Sensibilidade")
+        janela.geometry("1300x700")
+
+        tk.Label(
+            janela,
+            text=f"Resultado salvo em: {nome_arquivo}",
+            font=("Arial", 10, "bold"),
+            fg="darkgreen"
+        ).pack(anchor="w", padx=10, pady=(10, 5))
+
+        frame_texto = tk.Frame(janela)
+        frame_texto.pack(fill="both", expand=True, padx=10, pady=10)
+
+        scrollbar = tk.Scrollbar(frame_texto)
+        scrollbar.pack(side="right", fill="y")
+
+        texto = tk.Text(frame_texto, wrap="none", yscrollcommand=scrollbar.set, font=("Consolas", 9))
+        texto.pack(side="left", fill="both", expand=True)
+        scrollbar.config(command=texto.yview)
+
+        cabecalho = (
+            f"{'Variavel':<16} {'Teste':>10} {'dVar%':>8} {'CFlex(R$)':>12} {'CGrav(R$)':>12} "
+            f"{'TFlex(h)':>10} {'TGrav(h)':>10} {'dFlex(mm)':>10} {'dGrav(mm)':>10} {'Est.F':>8} {'Est.G':>8}\n"
+        )
+        texto.insert(tk.END, cabecalho)
+        texto.insert(tk.END, "-" * 134 + "\n")
+
+        for linha in linhas:
+            est_flexao = "Sim" if "OK" in str(linha["estab_flexao"]) else "Nao"
+            est_gravidade = "Sim" if "OK" in str(linha["estab_gravidade"]) else "Nao"
+            texto.insert(
+                tk.END,
+                f"{linha['variavel']:<16} "
+                f"{linha['valor_teste']:>10.3f} "
+                f"{linha['delta_percentual']:>8.1f} "
+                f"{linha['custo_flexao']:>12.2f} "
+                f"{linha['custo_gravidade']:>12.2f} "
+                f"{linha['tempo_flexao_h']:>10.2f} "
+                f"{linha['tempo_gravidade_h']:>10.2f} "
+                f"{linha['desloc_flexao_mm']:>10.2f} "
+                f"{linha['desloc_gravidade_mm']:>10.2f} "
+                f"{est_flexao:>8} "
+                f"{est_gravidade:>8}\n"
+            )
+
+        texto.config(state="disabled")
+
+    except ValueError:
+        messagebox.showerror("Erro", "Preencha todos os campos com valores numéricos válidos antes da análise.")
+    except Exception as e:
+        messagebox.showerror("Erro", f"Falha ao executar análise de sensibilidade:\n{e}")
+
 # Criar a janela principal
 root = tk.Tk()
 # Mostrar avisos antes de continuar
@@ -3184,9 +4061,6 @@ btn_editar_custos.pack(side=tk.LEFT, padx=5)
 label_info_custos = tk.Label(frame_custos, text="Clique para editar", font=("Arial", 9), wraplength=150)
 label_info_custos.pack(side=tk.LEFT, padx=5)
 
-# Atualizar as informações de custos ao iniciar
-atualizar_info_custos()
-
 # Novos campos de entrada para os parâmetros de estabilidade
 
 tk.Label(root, text="Peso Específico do Concreto (kN/m³):").grid(row=5, column=0)
@@ -3218,7 +4092,19 @@ tk.Label(root, text="Nível de Água (m):").grid(row=7, column=0)
 entry_nivel_agua = tk.Entry(root)
 entry_nivel_agua.insert(0, "0.0")  # Valor default
 entry_nivel_agua.grid(row=7, column=1)
-entry_nivel_agua.grid_remove()
+
+tk.Label(root, text="Subpressão (casos com água):").grid(row=8, column=6)
+var_subpressao = tk.StringVar(root)
+var_subpressao.set("desconsiderar")
+option_subpressao = tk.OptionMenu(
+    root,
+    var_subpressao,
+    "desconsiderar",
+    "considerar triangular",
+    "considerar retangular/base infinita"
+)
+option_subpressao.grid(row=8, column=7, sticky="w")
+
 
 tk.Label(root, text="Sobrecarga a montante (kN/m²):").grid(row=8, column=0)
 entry_sobrecarga_mon = tk.Entry(root)
@@ -3277,62 +4163,62 @@ btn_gravidade = tk.Button(root, text="Exibir Muro de Gravidade",
 btn_gravidade.grid(row=14, column=2, pady=5)
 
 entry_concreto_25_mat = tk.Entry(root)
-entry_concreto_25_mat.insert(0, "587.58")  # SINAPI 99439 - 03/2025
+entry_concreto_25_mat.insert(0, "631.51")  # SINAPI 99439 - 04/2026
 entry_concreto_25_mat.grid(row=2, column=2, padx=10, pady=5)
 entry_concreto_25_mat.grid_remove()
 
 entry_concreto_25_mdo = tk.Entry(root)
-entry_concreto_25_mdo.insert(0, "38.17")  # SINAPI 99439 - 03/2025
+entry_concreto_25_mdo.insert(0, "43.17")  # SINAPI 99439 - 04/2026
 entry_concreto_25_mdo.grid(row=2, column=3, padx=10, pady=5)
 entry_concreto_25_mdo.grid_remove()
 
 entry_concreto_25_tempo = tk.Entry(root)
-entry_concreto_25_tempo.insert(0, "1.302")  # SINAPI 99439 - 03/2025
+entry_concreto_25_tempo.insert(0, "1.302")  # SINAPI 99439 - 04/2026
 entry_concreto_25_tempo.grid(row=2, column=4, padx=10, pady=5)
 entry_concreto_25_tempo.grid_remove()
 
 entry_concreto_6_mat = tk.Entry(root)
-entry_concreto_6_mat.insert(0, "119.01")  # SINAPI 94974 - 03/2025
+entry_concreto_6_mat.insert(0, "336.22")  # SINAPI 94974 - 04/2026
 entry_concreto_6_mat.grid(row=3, column=2, padx=10, pady=5)
 entry_concreto_6_mat.grid_remove()
 
 entry_concreto_6_mdo = tk.Entry(root)
-entry_concreto_6_mdo.insert(0, "187.12")  # SINAPI 94974 - 03/2025
+entry_concreto_6_mdo.insert(0, "197.43")  # SINAPI 94974 - 04/2026
 entry_concreto_6_mdo.grid(row=3, column=3, padx=10, pady=5)
 entry_concreto_6_mdo.grid_remove()
 
 entry_concreto_6_tempo = tk.Entry(root)
-entry_concreto_6_tempo.insert(0, "6.2858")  # SINAPI 94974 - 03/2025
+entry_concreto_6_tempo.insert(0, "6.2858")  # SINAPI 94974 - 04/2026
 entry_concreto_6_tempo.grid(row=3, column=4, padx=10, pady=5)
 entry_concreto_6_tempo.grid_remove()
 
 entry_aco_ca50_mat = tk.Entry(root)
-entry_aco_ca50_mat.insert(0, "8.31")  # SINAPI 100345 - 03/2025
+entry_aco_ca50_mat.insert(0, "8.31")  # SINAPI 100345 - 04/2026
 entry_aco_ca50_mat.grid(row=4, column=2, padx=10, pady=5)
 entry_aco_ca50_mat.grid_remove()
 
 entry_aco_ca50_mdo = tk.Entry(root)
-entry_aco_ca50_mdo.insert(0, "1.5")  # SINAPI 100345 - 03/2025
+entry_aco_ca50_mdo.insert(0, "1.77")  # SINAPI 100345 - 04/2026
 entry_aco_ca50_mdo.grid(row=4, column=3, padx=10, pady=5)
 entry_aco_ca50_mdo.grid_remove()
 
 entry_aco_ca50_tempo = tk.Entry(root)
-entry_aco_ca50_tempo.insert(0, "0.0445")  # SINAPI 100345 - 03/2025
+entry_aco_ca50_tempo.insert(0, "0.0445")  # SINAPI 100345 - 04/2026
 entry_aco_ca50_tempo.grid(row=4, column=4, padx=10, pady=5)
 entry_aco_ca50_tempo.grid_remove()
 
 entry_forma_mat = tk.Entry(root)
-entry_forma_mat.insert(0, "19.1")  # SINAPI 100341 - 03/2025
+entry_forma_mat.insert(0, "20.17")  # SINAPI 100341 - 04/2026
 entry_forma_mat.grid(row=5, column=2, padx=10, pady=5)
 entry_forma_mat.grid_remove()
 
 entry_forma_mdo = tk.Entry(root)
-entry_forma_mdo.insert(0, "24.58")  # SINAPI 100341 - 03/2025
+entry_forma_mdo.insert(0, "28.25")  # SINAPI 100341 - 04/2026
 entry_forma_mdo.grid(row=5, column=3, padx=10, pady=5)
 entry_forma_mdo.grid_remove()
 
 entry_forma_tempo2 = tk.Entry(root)
-entry_forma_tempo2.insert(0, "0.7326")  # SINAPI 100341 - 03/2025
+entry_forma_tempo2.insert(0, "0.7326")  # SINAPI 100341 - 04/2026
 entry_forma_tempo2.grid(row=5, column=4, padx=10, pady=5)
 entry_forma_tempo2.grid_remove()
 
@@ -3396,17 +4282,20 @@ entry_descarga_tempo.insert(0, "0")  # Valor default
 entry_descarga_tempo.grid(row=9, column=4, padx=10, pady=5)
 entry_descarga_tempo.grid_remove()
 
-entry_forma_mat.insert(0, "19.1")  # SINAPI 100341 - 03/2025
+entry_forma_mat.insert(0, "20.17")  # SINAPI 100341 - 04/2026
 entry_forma_mat.grid(row=10, column=2, padx=10, pady=5)
 entry_forma_mat.grid_remove()
 
-entry_forma_mdo.insert(0, "24.58")  # SINAPI 100341 - 03/2025
+entry_forma_mdo.insert(0, "28.25")  # SINAPI 100341 - 04/2026
 entry_forma_mdo.grid(row=10, column=3, padx=10, pady=5)
 entry_forma_mdo.grid_remove()
 
-entry_forma_tempo2.insert(0, "0.7326")  # SINAPI 100341 - 03/2025
+entry_forma_tempo2.insert(0, "0.7326")  # SINAPI 100341 - 04/2026
 entry_forma_tempo2.grid(row=10, column=4, padx=10, pady=5)
 entry_forma_tempo2.grid_remove()
+
+# Campos de custo (Entry ocultos) já existem: atualiza o resumo ao lado de "Editar Custos"
+atualizar_info_custos()
 
 
 # ================================================================== #
@@ -3421,6 +4310,8 @@ tk.Label(root, text="Tipo de Muro:", font=("Arial", 10, "bold")).grid(row=9, col
 tk.Label(root, text="Custo Total:", font=("Arial", 10, "bold")).grid(row=9, column=1, sticky="w", padx=5, pady=(30,5))
 tk.Label(root, text="Tempo (h):", font=("Arial", 10, "bold")).grid(row=9, column=2, sticky="w", padx=5, pady=(30,5))
 tk.Label(root, text="Estabilidade:", font=("Arial", 10, "bold")).grid(row=9, column=3, sticky="w", padx=5, pady=(30,5))
+# Deslocamento ELS na última coluna da grade principal (col. 7, alinhado à direita)
+tk.Label(root, text="Desloc. ELS:", font=("Arial", 10, "bold")).grid(row=9, column=7, sticky="e", padx=5, pady=(30,5))
 
 # Muro de Flexão - Resumo
 tk.Label(root, text="Muro de Flexão:", font=("Arial", 12, "bold")).grid(row=10, column=0, sticky="w", padx=5)
@@ -3433,6 +4324,10 @@ label_tempo_total_flexao.grid(row=10, column=2, sticky="w", padx=5)
 label_estavel_flexao = tk.Label(root, text="Calcular", font=("Arial", 10))
 label_estavel_flexao.grid(row=10, column=3, sticky="w", padx=5)
 
+label_desloc_flexao = tk.Label(
+    root, text="—", font=("Arial", 9), justify="right", wraplength=360)
+label_desloc_flexao.grid(row=10, column=7, sticky="e", padx=5)
+
 # Muro de Gravidade - Resumo  
 tk.Label(root, text="Muro de Gravidade:", font=("Arial", 12, "bold")).grid(row=11, column=0, sticky="w", padx=5)
 label_custo_total_gravidade = tk.Label(root, text="R$ 0.00", font=("Arial", 11))
@@ -3444,10 +4339,30 @@ label_tempo_total_gravidade.grid(row=11, column=2, sticky="w", padx=5)
 label_estavel_gravidade = tk.Label(root, text="Calcular", font=("Arial", 10))
 label_estavel_gravidade.grid(row=11, column=3, sticky="w", padx=5)
 
+label_desloc_gravidade = tk.Label(
+    root, text="—", font=("Arial", 9), justify="right", wraplength=360)
+label_desloc_gravidade.grid(row=11, column=7, sticky="e", padx=5)
+
 # Botão para visualizar quantitativos detalhados
 btn_ver_quantitativos = tk.Button(root, text="Ver Quantitativos Detalhados", 
                                   command=lambda: exibir_quantitativos_detalhados())
 btn_ver_quantitativos.grid(row=12, column=0, columnspan=3, pady=10)
+
+btn_sensibilidade = tk.Button(
+    root,
+    text="Análise de Sensibilidade",
+    command=executar_analise_sensibilidade,
+    bg="lightyellow"
+)
+btn_sensibilidade.grid(row=12, column=3, columnspan=2, pady=10)
+
+btn_parametrico = tk.Button(
+    root,
+    text="Estudo Paramétrico",
+    command=abrir_estudo_parametrico_popup,
+    bg="lightcyan"
+)
+btn_parametrico.grid(row=12, column=5, columnspan=2, pady=10)
 
 def exibir_quantitativos_detalhados():
     """
@@ -3480,6 +4395,7 @@ def exibir_quantitativos_detalhados():
     try:
         tempo_concreto_25 = float(label_concreto_25.cget("text")) * float(entry_concreto_25_tempo.get())
         tempo_concreto_6 = float(label_concreto_6.cget("text")) * float(entry_concreto_6_tempo.get())
+        tempo_concreto_magro_flex = float(label_concreto_magro_flex.cget("text")) * float(entry_concreto_6_tempo.get())
         tempo_aco = float(label_aco_ca50.cget("text")) * float(entry_aco_ca50_tempo.get())
         tempo_aterro = float(label_aterro.cget("text")) * float(entry_aterro_tempo.get())
         tempo_corte = float(label_corte.cget("text")) * float(entry_corte_tempo.get())
@@ -3487,11 +4403,12 @@ def exibir_quantitativos_detalhados():
         tempo_descarga = float(label_descarga.cget("text")) * float(entry_descarga_tempo.get())
         tempo_forma = float(label_forma.cget("text")) * 0.7326 # float(entry_forma_tempo2.get())
     except:
-        tempo_concreto_25 = tempo_concreto_6 = tempo_aco = tempo_aterro = 0
+        tempo_concreto_25 = tempo_concreto_6 = tempo_concreto_magro_flex = tempo_aco = tempo_aterro = 0
         tempo_corte = tempo_carga = tempo_descarga = tempo_forma = 0
     
     items_flexao = [
         ("Concreto Estrutural (m³)", label_concreto_25.cget("text"), label_total_concreto_25.cget("text"), f"{tempo_concreto_25:.1f}"),
+        ("Concreto magro base (5 cm) (m³)", label_concreto_magro_flex.cget("text"), label_total_concreto_magro_flex.cget("text"), f"{tempo_concreto_magro_flex:.1f}"),
         ("Concreto Massa (m³)", label_concreto_6.cget("text"), label_total_concreto_6.cget("text"), f"{tempo_concreto_6:.1f}"),
         ("Aço CA50 (kg)", label_aco_ca50.cget("text"), label_total_aco_ca50.cget("text"), f"{tempo_aco:.1f}"),
         #("Solo - Aterro (m³)", label_aterro.cget("text"), label_total_aterro.cget("text"), f"{tempo_aterro:.1f}"),
@@ -3578,9 +4495,18 @@ def exibir_quantitativos_detalhados():
     tk.Label(janela_quant, text=f"Gravidade: {label_estavel_gravidade.cget('text')}", 
              font=("Arial", 10)).grid(row=row_start + len(items_flexao) + 4, column=4, columnspan=4, padx=5)
     
+    tk.Label(janela_quant, text="DESLOCAMENTOS ELS (TOPO)", font=("Arial", 12, "bold")).grid(
+        row=row_start + len(items_flexao) + 5, column=0, columnspan=8, pady=(15, 5))
+    tk.Label(janela_quant, text=f"Muro de flexão: {label_desloc_flexao.cget('text')}",
+             font=("Arial", 10), justify="left", wraplength=700).grid(
+        row=row_start + len(items_flexao) + 6, column=0, columnspan=8, sticky="w", padx=10)
+    tk.Label(janela_quant, text=f"Muro de gravidade: {label_desloc_gravidade.cget('text')}",
+             font=("Arial", 10), justify="left", wraplength=700).grid(
+        row=row_start + len(items_flexao) + 7, column=0, columnspan=8, sticky="w", padx=10)
+    
     # Botão para fechar
     btn_fechar = tk.Button(janela_quant, text="Fechar", command=janela_quant.destroy)
-    btn_fechar.grid(row=row_start + len(items_flexao) + 6, column=0, columnspan=8, pady=20)
+    btn_fechar.grid(row=row_start + len(items_flexao) + 8, column=0, columnspan=8, pady=20)
 
 # ================================================================== #
 # ------------- LABELS OCULTOS PARA CÁLCULOS INTERNOS ------------- #
@@ -3596,6 +4522,11 @@ label_concreto_6 = tk.Label(root, text="0.00")
 label_concreto_6.grid_remove()
 label_total_concreto_6 = tk.Label(root, text="0.00")
 label_total_concreto_6.grid_remove()
+
+label_concreto_magro_flex = tk.Label(root, text="0.00")
+label_concreto_magro_flex.grid_remove()
+label_total_concreto_magro_flex = tk.Label(root, text="0.00")
+label_total_concreto_magro_flex.grid_remove()
 
 label_aco_ca50 = tk.Label(root, text="0.00")
 label_aco_ca50.grid_remove()
