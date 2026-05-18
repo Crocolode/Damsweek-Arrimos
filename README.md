@@ -109,9 +109,9 @@ Trabalhos futuros prevêem a expansão para condições de carregamento mais com
 
 ## Como citar
 
-> NICOLodi, F. P.; VIEIRA, G. F. P. C.; GUTSTEIN, D. **Estudo de viabilidade paramétrico de muros de arrimo utilizando programação em Python**. *Artigo apresentado no Damsweek* [template R4]. Disponível em: https://github.com/Crocolode/Damsweek-Arrimos
+> NICOLODI, F. P.; VIEIRA, G. F. P. C.; GUTSTEIN, D. **Estudo de viabilidade paramétrico de muros de arrimo utilizando programação em Python**. *Artigo apresentado no Damsweek*. Disponível em: [atualizar após eventual aprovação do artigo]
 
-Ajuste venue, ano e páginas conforme a publicação final do congresso.
+Ajustar ano e páginas conforme a publicação final do congresso.
 
 ---
 
@@ -123,9 +123,3 @@ Ajuste venue, ano e páginas conforme a publicação final do congresso.
 - Eletrobras (2003). *Critérios de Projeto Civil de Usinas Hidrelétricas*.
 - ABNT NBR 6118 (2026). *Projeto de estruturas de concreto*.
 - Caixa Econômica Federal (2024). *Manual Técnico do SINAPI*.
-
----
-
-## Licença
-
-Este projeto está sob a licença **MIT** — veja o arquivo [LICENSE](LICENSE).
