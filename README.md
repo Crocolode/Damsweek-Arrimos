@@ -1,6 +1,6 @@
-# Dimensionamento de Muros de Arrimo
+# Damsweek-Arrimos
 
-Projeto de TCC em engenharia civil para dimensionamento de muros de arrimo.
+Projeto de TCC em engenharia civil para dimensionamento de muros de arrimo (flexão e gravidade).
 
 ## Arquivos principais
 
@@ -29,3 +29,7 @@ Se preferir, você também pode executar diretamente com o Python do sistema:
 ```powershell
 python Dimensionamentos.py
 ```
+
+## Licença
+
+Este projeto está sob a licença MIT — veja o arquivo [LICENSE](LICENSE).
