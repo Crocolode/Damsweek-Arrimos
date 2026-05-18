@@ -520,7 +520,8 @@ def plotar_muro_gravidade(h, d, crista, b_mon, gamma_concreto, gamma_solo_sat, g
         ax1.annotate('', xy=(b_mon+1, 0), xytext=(b_mon+1, h/3),
                     arrowprops=dict(arrowstyle='<->', color='red', lw=1, ls='--'))
         ax1.text(b_mon+1.15, h/2/3, f'h = {h/3:.2f} m',
-                ha='left', va='center', fontsize=9, color='red', rotation=90)
+                ha='left', va='center', fontsize=9, color='red', rotation
+                =90)
 
     
     # Diagrama de tensões na base
@@ -1605,383 +1606,545 @@ def botao_plotar_muro_arrimo():
 
 def plotar_muro_arrimo(b_jus, b_mon, h, d, as_final, gamma_solo_sat, gamma_solo_sub, tensao_max, pressao_adm, resultados_estabilidade, resultados_dimensionamento):
     """
-    Plota o diagrama do muro de arrimo com armadura
-    
-    Parâmetros:
-    b_jus: largura da base a jusante (m)
-    b_mon: largura da base a montante (m)
-    h: altura total do muro (m)
-    d: altura útil (m)
-    as_final: área de aço final (cm²)
-    gamma_solo_sat: peso específico do solo saturado (kN/m³)
-    gamma_solo_sub: peso específico do solo submerso (kN/m³)
-    tensao_max: tensão máxima na base (kN/m²)
-    pressao_adm: pressão admissível do solo (kN/m²)
-    resultados_estabilidade: dicionário com resultados da verificação de estabilidade
+    Desenho técnico do muro de arrimo à flexão:
+    - geometria do muro em L (concreto) + aterro + solo natural;
+    - diagramas de pressão lateral (solo saturado, solo submerso, água e sobrecarga);
+    - resultantes de empuxo com cota do braço até a base;
+    - diagrama trapezoidal de tensões na fundação com referência da pressão admissível;
+    - cotas técnicas (H, h_útil, d, b_jus, b_mon, B);
+    - tabela completa com cargas, braços e momentos em torno do ponto de tombamento (PT)
+      e do centro de gravidade da base (CG).
     """
-    plt.close('all')  # Fecha todas as figuras existentes
-    # Extrair dados do dicionário de resultados
+    import matplotlib.patches as patches
+
+    plt.close('all')
+
+    # --- Dados de entrada ---
     nivel_agua = resultados_estabilidade.get('nivel_agua', 0)
-    gamma_agua = resultados_estabilidade.get('gamma_agua', 10)
     sobrecarga_mon = resultados_estabilidade.get('sobrecarga_mon', 0)
-    peso_muro = resultados_estabilidade.get('peso_muro', 0)
-    peso_solo = resultados_estabilidade.get('peso_solo', 0)
-    peso_solo_sat = resultados_estabilidade.get('peso_solo_sat', 0)
-    peso_solo_sub = resultados_estabilidade.get('peso_solo_sub', 0)
-    peso_agua = resultados_estabilidade.get('peso_agua', 0)
-    peso_sobre = resultados_estabilidade.get('peso_sobre', 0)
     e0 = resultados_estabilidade.get('e0', 0)
-    e_agua = resultados_estabilidade.get('e_agua', 0)
-    braco_e0 = resultados_estabilidade.get('braco_e0', 0)
-    e_sobre = resultados_estabilidade.get('e_sobre', 0)
-    braco_e_sobre = resultados_estabilidade.get('braco_e_sobre', 0)
-    momento_sobre = resultados_estabilidade.get('momento_sobre', 0)
-    mt = resultados_estabilidade.get('mt', 0)
-    me = resultados_estabilidade.get('me', 0)
-    me_cg = resultados_estabilidade.get('me_cg', 0)
-    forca_normal = resultados_estabilidade.get('forca_normal', 0)
-    cg_base = resultados_estabilidade.get('cg_base', 0)
-    e0_agua = resultados_estabilidade.get('e0_agua', 0) 
-    braco_agua_PT = resultados_estabilidade.get('braco_agua_PT', 0)
     e0_solo_sat = resultados_estabilidade.get('e0_solo_sat', 0)
-    braco_solo_sat_PT = resultados_estabilidade.get('braco_solo_sat_PT', 0)
     e0_solo_sub = resultados_estabilidade.get('e0_solo_sub', 0)
-    braco_solo_sub_PT = resultados_estabilidade.get('braco_solo_sub_PT', 0)
-    tensao_max = resultados_estabilidade.get('tensao_max', 0)
-    tensao_min = resultados_estabilidade.get('tensao_min', 0)
-    x_sobre = resultados_estabilidade.get('x_sobre', 0)
-    
-    # Ajustar escala dos empuxos para melhor visualização
-    empuxo_max = max(e0, e0_agua, e0_solo_sat, e0_solo_sub)
-    empuxo_scale = (b_mon + b_jus) / empuxo_max if empuxo_max > 0 else 0.05
-    
-    # Criar figura com dois subplots lado a lado
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 8))
-    
-    # Plotar a seção do muro de arrimo no subplot da esquerda
-    ax1.plot([b_jus, b_jus, b_jus - d, b_jus - d, 0], [b_jus, h, h, 0, 0], color='gray', linewidth=2)  # Muro
-    ax1.fill_between([0, b_mon+b_jus], 0, d, color='gainsboro', alpha=0.5)  # Área da base
-    ax1.fill_between([b_jus - d, b_jus], b_jus, h, color='gainsboro', alpha=0.5)  # Área do muro
-    ax1.plot([0, 0, 0, b_mon+b_jus, 0], [d, 0, 0, d, d], color='gainsboro', linewidth=2)  # Contorno da base
-    ax1.fill_between([0, 0], b_jus, d, color='gainsboro', alpha=0.5)  # Área do muro
-    ax1.fill_between([b_jus, b_mon+b_jus], d, h, color='saddlebrown', alpha=0.5, label='Solo')  # Terra acima da base
-    
-    # Adicionar solo submerso se houver nível d'água
-    if nivel_agua > 0:
-        ax1.fill_between([b_jus, b_mon+b_jus], d, nivel_agua, color='lightblue', alpha=0.3, label='Solo Submerso')
-        # Adicionar linha do nível d'água
-        ax1.plot([b_jus, b_mon+b_jus], [nivel_agua, nivel_agua], 'b--', linewidth=1, label='Nível d\'água')
-    
-    # Adicionar empuxos
-    if nivel_agua > 0:
-        # Empuxo do solo saturado
-        pontos_empuxo_solo = [
-            [b_mon + b_jus, 0],
-            [b_mon + b_jus, h],
-            [b_mon + b_jus + e0_solo_sat*empuxo_scale, nivel_agua],
-            [b_mon + b_jus + e0*empuxo_scale, 0]
-        ]
-        ax1.add_patch(plt.Polygon(pontos_empuxo_solo, closed=True, fill=True, color='red', alpha=0.2, label='Empuxo do Solo'))
-        
-        # Empuxo da água
-        pontos_empuxo_agua = [
-            [b_mon + b_jus + e0_solo_sat*empuxo_scale, nivel_agua],
-            [b_mon + b_jus + (e0_solo_sat + e0_solo_sub + e0_agua)*empuxo_scale*2, 0],
-            [b_mon + b_jus + e0*empuxo_scale, 0]
-        ]
-        ax1.add_patch(plt.Polygon(pontos_empuxo_agua, closed=True, fill=True, color='blue', alpha=0.2, label='Empuxo da Água'))
+    e0_agua = resultados_estabilidade.get('e0_agua', 0)
+    e_sobre = resultados_estabilidade.get('e_sobre', 0)
+    braco_e0 = resultados_estabilidade.get('braco_e0', h / 3 if h > 0 else 0)
+    braco_e0_solo_sat = resultados_estabilidade.get('braco_e0_solo_sat', h / 3 if h > 0 else 0)
+    braco_e0_solo_sub = resultados_estabilidade.get('braco_e0_solo_sub', nivel_agua / 3 if nivel_agua > 0 else 0)
+    braco_e0_agua = resultados_estabilidade.get('braco_e0_agua', nivel_agua / 3 if nivel_agua > 0 else 0)
+    braco_e_sobre_PT = resultados_estabilidade.get('braco_e_sobre_PT', h / 2 if h > 0 else 0)
+    tensao_max_v = resultados_estabilidade.get('tensao_max', tensao_max)
+    tensao_min_v = resultados_estabilidade.get('tensao_min', 0)
+    base_teorica = resultados_estabilidade.get('base_teorica', b_jus + b_mon)
+    base_ok = resultados_estabilidade.get('base_ok', False)
+    forca_subpressao = resultados_estabilidade.get('forca_subpressao', 0)
 
-        # Adicionar setas e valores dos empuxos
-        ax1.arrow(b_mon + b_jus + e0*empuxo_scale, nivel_agua/3, -e0*empuxo_scale, 0, head_width=0.1, head_length=0.1, fc='blue', ec='blue', label='Empuxo da Água')
-        ax1.text(b_mon + b_jus + e0*empuxo_scale/2, nivel_agua/3 - 0.2, f'Ea = {e0_agua:.1f} kN/m', ha='center', color='blue')
-        
-        ax1.arrow(b_mon + b_jus + e0*empuxo_scale, braco_e0, -e0*empuxo_scale, 0, head_width=0.1, head_length=0.1, fc='red', ec='red')
-        ax1.text(b_mon + b_jus + e0*empuxo_scale/2, braco_e0, f'Es = {e0_solo_sat:.1f} kN/m', ha='center', color='red')
-
-        # Adicionar braços de alavanca verticais
-        ax1.annotate('', xy=(b_mon + b_jus + e0*empuxo_scale, braco_e0), xytext=(b_mon + b_jus + e0*empuxo_scale, 0),
-                    arrowprops=dict(arrowstyle='<->', color='red', lw=1, ls='--'))
-        ax1.text(b_mon + b_jus + e0*empuxo_scale + 0.2, braco_e0/2, f'{braco_e0:.2f} m', ha='center', va='bottom', fontsize=9, color='red')
-
-        ax1.annotate('', xy=(b_mon + b_jus + e0*empuxo_scale - 0.5, nivel_agua/3), xytext=(b_mon + b_jus + e0*empuxo_scale - 0.5, 0),
-                    arrowprops=dict(arrowstyle='<->', color='blue', lw=1, ls='--'))
-        ax1.text(b_mon + b_jus + e0*empuxo_scale - 0.3, nivel_agua/6, f'{nivel_agua/3:.2f} m', ha='center', va='bottom', fontsize=9, color='blue')
-
-    else:
-        # Empuxo do solo (sem água)
-        pontos_empuxo = [
-            [b_mon, 0],
-            [b_mon, h],
-            [b_mon + e0*empuxo_scale, 0]
-        ]
-        ax1.add_patch(plt.Polygon(pontos_empuxo, closed=True, fill=True, color='red', alpha=0.2, label='Empuxo do Solo'))
-        
-        # Adicionar seta e valor do empuxo
-        ax1.arrow(b_mon + e0*empuxo_scale, h/3, -e0*empuxo_scale, 0, head_width=0.1, head_length=0.1, fc='red', ec='red')
-        ax1.text(b_mon + e0*empuxo_scale/2, h/3, f'E = {e0:.1f} kN/m', ha='center', color='red')
-
-        # Adicionar braço de alavanca
-        ax1.annotate('', xy=(b_mon, braco_e0), xytext=(b_mon + e0*empuxo_scale, braco_e0),
-                    arrowprops=dict(arrowstyle='<->', color='red', lw=1, ls='--'))
-        ax1.text(b_mon + e0*empuxo_scale/2, braco_e0, f'{braco_e0:.2f} m', ha='center', va='bottom', fontsize=9, color='red')
-
-    # Adicionar cotas
-    ax1.text((b_jus + b_mon)/2, -0.2, f'Base: {b_jus + b_mon:.2f} m', ha='center', va='top', fontsize=10)
-    ax1.text(-0.2, h/2, f'Altura: {h:.2f} m', ha='right', va='center', fontsize=10, rotation='vertical')
-    ax1.text((b_jus + b_mon)/2, d, f'Altura útil: {d:.2f} m', ha='center', va='bottom', fontsize=10)
-    ax1.text(b_mon + 0.5, h/2, f'Área de Aço: {as_final:.2f} cm²', ha='left', va='center', fontsize=10, rotation='vertical')
-
-    # Configurar o subplot da esquerda
-    ax1.set_xlim(-1, b_mon + b_jus + 1 + e0*empuxo_scale)
-    ax1.set_ylim(-0.5, h + 0.5)
-    ax1.set_aspect('equal')
-    ax1.set_title('Seção do Muro de Arrimo à Flexão')
-    ax1.set_xlabel('Base (m)')
-    ax1.set_ylabel('Altura (m)')
-    ax1.grid(True)
-    ax1.legend()
-
-    # Adicionar informação da pressão admissível
-    ax1.text(0, -0.5, f"Pressão Admissível: {pressao_adm:.2f} kN/m²", ha='left', va='top', fontsize=10)
-    ax1.text(0, -1, f"Tensão Máxima: {tensao_max:.2f} kN/m²", ha='left', va='top', fontsize=10)
-    # Desenhar a linha de pressão admissível
-    ax1.plot([0, b_mon + b_jus], [-pressao_adm*0.001, -pressao_adm*0.001], 'k--', linewidth=1)
-    # Desenhar as tensões na fundação
-    ax1.plot([0, b_mon + b_jus], [-tensao_max*0.001, -tensao_min*0.001], 'k--', linewidth=1)
-
-    
-    # Adicionar informações sobre a base teórica necessária e a comparação com a base máxima
     b_total = b_jus + b_mon
-    if 'base_teorica' in resultados_estabilidade:
-        base_teorica = resultados_estabilidade['base_teorica']
-        base_ok = resultados_estabilidade.get('base_ok', False)
-        base_atual_ok = resultados_estabilidade.get('base_atual_ok', False)
-        base_max_ok = resultados_estabilidade.get('base_max_ok', True)
-        
-        """
-        # Mostrar informações sobre a base
-        ax1.text(0, -2.4, f"Base Atual: {b_total:.2f} m", ha='left', va='top', fontsize=10)
-        ax1.text(0, -3.2, f"Base Teórica Necessária: {base_teorica:.2f} m", ha='left', va='top', fontsize=10)
-        
-        # Status da base atual
-        status_base_atual = "Sim" if base_atual_ok else "Não"
-        cor_status_atual = "green" if base_atual_ok else "red"
-        ax1.text(0, -4.0, f"Base Atual Suficiente: {status_base_atual}", ha='left', va='top', fontsize=10, color=cor_status_atual)
-        
-        # Status da base máxima
-        status_base_max = "Sim" if base_max_ok else "Não"
-        cor_status_max = "green" if base_max_ok else "red"
-        ax1.text(0, -4.8, f"Dentro do Limite Máximo: {status_base_max}", ha='left', va='top', fontsize=10, color=cor_status_max)
-        
-        # Mensagem geral sobre adequação da base
-        status_geral = "Sim" if base_ok else "Não"
-        cor_status_geral = "green" if base_ok else "red"
-        ax1.text(0, -5.6, f"Base Adequada: {status_geral}", ha='left', va='top', fontsize=12, fontweight='bold', color=cor_status_geral)
-        
-        # Adicionar uma mensagem destacada sobre a adequação da base
-        if not base_ok:
-            mensagens = []
-            if not base_atual_ok:
-                mensagens.append(f"Base atual insuficiente (necessário aprox. +{base_teorica - b_total:.2f}m)")
-            if not base_max_ok:
-                mensagens.append(f"Base teórica excede o limite máximo permitido")
-            
-            if mensagens:
-                plt.figtext(0.5, 0.01, " | ".join(mensagens), 
-                          ha='center', fontsize=12, color='red',
-                          bbox={"facecolor":"yellow", "alpha":0.5, "pad":5})
-        
-        """
 
-    # Plotar os quantitativos dos materiais
-    volume_concreto = (b_mon + b_jus + h) * d  # Volume em m³
-    peso_terra, x_cg, volume_aterro, volume_corte = calcular_peso_terra_montante(h, b_mon, gamma_solo_sat, gamma_solo_sub)
-    solo_corte = volume_corte
-    solo_aterro = volume_aterro
-    solo_carga = volume_aterro - volume_concreto
+    # --- Figura e layout ---
+    fig = plt.figure(figsize=(15, 10))
+    gs = fig.add_gridspec(
+        2, 2,
+        width_ratios=[1.25, 1.0],
+        height_ratios=[1.5, 1.0],
+        hspace=0.30, wspace=0.10,
+    )
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax2 = fig.add_subplot(gs[0, 1])
+    ax_tabela = fig.add_subplot(gs[1, :])
+    ax_tabela.axis('off')
 
-    # Relatório no subplot da direita
-    ax2.axis('off')  # Desativa os eixos
-    ax2.set_title('Resumo')
+    # =====================================================================
+    # 1) Solo natural abaixo da base e ao lado do muro (sem cobrir base)
+    # =====================================================================
+    sub_h = 0.6
+    folga_esq = 1.2
+    folga_dir = 0.6
 
-    relatorio = (
-        f"Resumo do Quantitativo:\n"
-        f"1. Área de Aço: {as_final:.2f} cm²/m\n"
-        f"2. Volume de Concreto: {volume_concreto:.2f} m³/m\n"
-        f"3. Volume de Solo - Corte: {solo_corte:.2f} m³/m\n"
-        f"4. Volume de Solo - Aterro: {solo_aterro:.2f} m³/m\n"
-        f"5. Volume de Solo - Carga [+] / Descarga [-]: {solo_carga:.2f} m³/m\n\n"
+    solo_esq = patches.Rectangle(
+        (-folga_esq, -sub_h), folga_esq, sub_h,
+        facecolor='#e0c89c', edgecolor='#7a5a1e', hatch='///', alpha=0.6, linewidth=0.5,
+    )
+    solo_dir = patches.Rectangle(
+        (b_total, -sub_h), folga_dir + 0.4, sub_h,
+        facecolor='#e0c89c', edgecolor='#7a5a1e', hatch='///', alpha=0.6, linewidth=0.5,
+    )
+    ax1.add_patch(solo_esq)
+    ax1.add_patch(solo_dir)
+    ax1.plot([-folga_esq, 0], [0, 0], color='#7a5a1e', linewidth=1.0)
+    ax1.plot([b_total, b_total + folga_dir + 0.4], [0, 0], color='#7a5a1e', linewidth=1.0)
 
-        f"Relatório de Estabilidade (caso de carregamento normal):\n"
-        f"1. Fator de Segurança ao Deslizamento: {resultados_estabilidade['fs_deslizamento_total']:.2f} "
-        f"{'(OK)' if resultados_estabilidade['fs_deslizamento_ok'] else '(NÃO OK - RISCO DE DESLIZAMENTO)'}\n"
-        f"2. Fator de Segurança ao Tombamento: {abs(resultados_estabilidade['fs_tombamento']):.2f} "
-        f"{'(OK)' if abs(resultados_estabilidade['fs_tombamento_ok']) else '(NÃO OK - RISCO DE TOMBAMENTO)'}\n"
-        f"3. Tensão Máxima: {resultados_estabilidade['tensao_max']:.2f} kN/m² "
-        f"{'(OK)' if resultados_estabilidade['pressao_adm_ok'] else '(NÃO OK - EXCEDE CAPACIDADE DO SOLO)'}\n"
-        f"4. Tensão Mínima: {resultados_estabilidade['tensao_min']:.2f} kN/m² "
-        f"{'(OK)' if resultados_estabilidade['tensao_min'] > 0 else '(NÃO OK - RISCO DE LEVANTAMENTO)'}\n"
-        f"5. Base Teórica Necessária: {base_teorica:.2f} m\n"
-        f"6. Base Atual: {b_total:.2f} m\n"
-        f"7. Base Adequada: {'Sim' if base_ok else 'Não'}\n"
-        f"8. ELS — Desloc. topo (flexão): {resultados_estabilidade['deslocamento_topo_mm']:.2f} mm "
-        f"(lim. h/500 = {resultados_estabilidade['limite_deslocamento_mm']:.2f} mm) "
-        f"{'OK' if resultados_estabilidade['deslocamento_ok'] else 'NÃO OK'}\n"
-        f"   Referência: q triangular (base)={resultados_estabilidade.get('els_q_base_kN_m', 0):.2f} kN/m, "
-        f"q uniforme (sobrecarga)={resultados_estabilidade.get('els_q_uniforme_kN_m', 0):.2f} kN/m\n\n"
+    # =====================================================================
+    # 2) Aterro a montante
+    # =====================================================================
+    x_aterro_min = b_jus + d
+    x_aterro_max = b_total + folga_dir
+    aterro = patches.Polygon(
+        [(x_aterro_min, d), (x_aterro_max, d), (x_aterro_max, h), (x_aterro_min, h)],
+        facecolor='#ead8a6', edgecolor='#7a5a1e', hatch='....', alpha=0.85, linewidth=0.7,
+    )
+    ax1.add_patch(aterro)
+    ax1.plot([x_aterro_min, x_aterro_max], [h, h], color='#7a5a1e', linewidth=1.2)
 
-        f"Relatório de Dimensionamento:\n"
-        f"1. Diâmetro da Barra: {resultados_dimensionamento['dia_barra']:.2f} mm\n"
-        f"2. Espaçamento: {resultados_dimensionamento['espacamento']:.2f} cm\n"
-        f"3. Armadura Mínima: {resultados_dimensionamento['as_min']:.2f} cm²\n"
-        f"4. Armadura Calculada: {resultados_dimensionamento['as_calc']:.2f} cm²\n"
-        f"5. Armadura Final: {resultados_dimensionamento['as_final']:.2f} cm²\n"
-        f"6. Momento: {resultados_dimensionamento['momento']:.2f} kN.m\n"
-        f"7. x/d: {resultados_dimensionamento['x_d']:.2f}"
-        f"8. fck: {resultados_dimensionamento['fck']:.2f} MPa"
+    # Nível d'água
+    if nivel_agua > 0:
+        ax1.plot(
+            [x_aterro_min, x_aterro_max], [nivel_agua, nivel_agua],
+            color='#1f6fbf', linestyle='--', linewidth=1.0,
+        )
+        ax1.text(
+            x_aterro_max + 0.05, nivel_agua, "NA",
+            color='#1f6fbf', fontsize=9, va='center',
+        )
+
+    # Sobrecarga sobre o aterro
+    if sobrecarga_mon > 0:
+        ax1.fill_between(
+            [x_aterro_min, x_aterro_max], h, h + 0.20,
+            color='#ffd966', edgecolor='#a37000', hatch='xxx', alpha=0.85, linewidth=0.5,
+        )
+        ax1.text(
+            (x_aterro_min + x_aterro_max) / 2, h + 0.28,
+            f"q = {sobrecarga_mon:.1f} kN/m²",
+            ha='center', va='bottom', fontsize=9, color='#7a5a1e',
+        )
+
+    # =====================================================================
+    # 3) Concreto do muro (em L)
+    # =====================================================================
+    base_patch = patches.Rectangle(
+        (0, 0), b_total, d,
+        facecolor='#bdbdbd', edgecolor='black', linewidth=1.4, zorder=3,
+    )
+    fuste_patch = patches.Rectangle(
+        (b_jus, d), d, max(h - d, 0),
+        facecolor='#bdbdbd', edgecolor='black', linewidth=1.4, zorder=3,
+    )
+    ax1.add_patch(base_patch)
+    ax1.add_patch(fuste_patch)
+
+    # Indicação de área de aço no fuste
+    ax1.text(
+        b_jus + d / 2, (h + d) / 2,
+        f"As = {as_final:.2f} cm²/m",
+        fontsize=8, ha='center', va='center', rotation=90,
+        bbox=dict(facecolor='white', edgecolor='black', boxstyle='round,pad=0.25', alpha=0.85),
+        zorder=4,
     )
 
-    ax2.text(0.05, 0.95, relatorio, fontsize=10, va='top', ha='left', transform=ax2.transAxes)
+    # =====================================================================
+    # 4) Diagramas de pressão lateral (em "carris" à direita do aterro)
+    # =====================================================================
+    largura_max_carril = 1.2
 
-    # Adicionar mensagem de alerta se necessário
-    if not resultados_estabilidade['base_ok']:
-        mensagens = []
-        if not resultados_estabilidade['base_atual_ok']:
-            mensagens.append(f"Base atual insuficiente (necessário aprox. +{resultados_estabilidade['base_teorica'] - (b_jus + b_mon):.2f}m)")
-        if not resultados_estabilidade['base_max_ok']:
-            mensagens.append(f"Base teórica excede o limite máximo permitido")
-        
-        if mensagens:
-            plt.figtext(0.5, 0.02, " | ".join(mensagens), 
-                      ha='center', fontsize=12, color='red',
-                      bbox={"facecolor":"yellow", "alpha":0.5, "pad":5})
+    componentes = []
+    if nivel_agua > 0:
+        if e0_solo_sat > 1e-9:
+            componentes.append(("E_solo,sat", e0_solo_sat, braco_e0_solo_sat,
+                                nivel_agua, h, 'tri', '#c0392b'))
+        if e0_solo_sub > 1e-9:
+            componentes.append(("E_solo,sub", e0_solo_sub, braco_e0_solo_sub,
+                                0, nivel_agua, 'tri', '#a93226'))
+        if e0_agua > 1e-9:
+            componentes.append(("E_água", e0_agua, braco_e0_agua,
+                                0, nivel_agua, 'tri', '#2874a6'))
+    else:
+        if e0_solo_sat > 1e-9:
+            componentes.append(("E_solo", e0_solo_sat, braco_e0_solo_sat,
+                                0, h, 'tri', '#c0392b'))
+    if e_sobre > 1e-9:
+        componentes.append(("E_q", e_sobre, braco_e_sobre_PT, 0, h, 'ret', '#e67e22'))
 
-    # Criar tabela com resumo das cargas, braços e momentos
-    dados_tabela = []
-    nomes_cargas = []
-    
-    # Considerando dados da função verificar_estabilidade_flexao
-    # Peso do muro
-    peso_muro = resultados_estabilidade.get('peso_muro', 0)
-    if 'peso_muro' in resultados_estabilidade:
-        nomes_cargas.append("Peso do Muro")
-        x_muro = resultados_estabilidade.get('x_muro', 0)
-        momento_muro_PT = resultados_estabilidade.get('momento_muro_PT', 0)
-        braco_muro_PT = resultados_estabilidade.get('braco_muro_PT', 0)
-        momento_muro_CG = resultados_estabilidade.get('momento_muro_CG', 0)
-        braco_muro_CG = resultados_estabilidade.get('braco_muro_CG', 0)
-        dados_tabela.append([f"{peso_muro:.2f}", f"{x_muro:.2f}", f"{momento_muro_PT:.2f}", f"{braco_muro_CG:.2f}", f"{momento_muro_CG:.2f}"])
-    
-    # Peso do solo
-    peso_solo_sat = resultados_estabilidade.get('peso_solo_sat', 0)
-    if 'peso_solo_sat' in resultados_estabilidade:
-        nomes_cargas.append("Peso do Solo Saturado")
-        braco_solo_sat_PT = resultados_estabilidade.get('braco_solo_sat_PT', 0)
-        momento_solo_PT = resultados_estabilidade.get('momento_solo_PT', 0)
-        braco_solo_sat_CG = resultados_estabilidade.get('braco_solo_sat_CG', 0)
-        momento_solo_CG = resultados_estabilidade.get('momento_solo_CG', 0)
-        dados_tabela.append([f"{peso_solo_sat:.2f}", f"{braco_solo_sat_PT:.2f}", f"{momento_solo_PT:.2f}", f"{braco_solo_sat_CG:.2f}", f"{momento_solo_CG:.2f}"])
-    
-    peso_solo_sub = resultados_estabilidade.get('peso_solo_sub', 0)
-    if 'peso_solo_sub' in resultados_estabilidade:
-        nomes_cargas.append("Peso do Solo Submerso")
-        braco_solo_sub_PT = resultados_estabilidade.get('braco_solo_sub_PT', 0)
-        momento_solo_sub_PT = resultados_estabilidade.get('momento_solo_sub_PT', 0)
-        braco_solo_sub_CG = resultados_estabilidade.get('braco_solo_sub_CG', 0)
-        momento_solo_sub_CG = resultados_estabilidade.get('momento_solo_sub_CG', 0)
-        dados_tabela.append([f"{peso_solo_sub:.2f}", f"{braco_solo_sub_PT:.2f}", f"{momento_solo_sub_PT:.2f}", f"{braco_solo_sub_CG:.2f}", f"{momento_solo_sub_CG:.2f}"])
+    x_atual = x_aterro_max + 0.6
+    if componentes:
+        valor_max = max(c[1] for c in componentes)
+        escala_emp = largura_max_carril / valor_max if valor_max > 0 else 0.0
 
-    # Empuxo passivo
-    ep = resultados_estabilidade.get('ep', 0)
-    if 'ep' in resultados_estabilidade:
-        nomes_cargas.append("Empuxo")
-        braco_ep_PT = resultados_estabilidade.get('braco_ep_PT', 0)
-        momento_ep_PT = resultados_estabilidade.get('momento_ep_PT', 0)
-        braco_ep_CG = resultados_estabilidade.get('braco_ep_CG', 0)
-        momento_ep_CG = resultados_estabilidade.get('momento_ep_CG', 0)
-        dados_tabela.append([f"{ep:.2f}", f"{braco_ep_PT:.2f}", f"{momento_ep_PT:.2f}", f"{braco_ep_CG:.2f}", f"{momento_ep_CG:.2f}"])
+        for nome, valor, braco_pt, y0, y1, forma, cor in componentes:
+            h_dia = max(y1 - y0, 1e-6)
+            if forma == 'tri':
+                p_max = 2 * valor / h_dia
+                largura = p_max * escala_emp
+                poly = patches.Polygon(
+                    [(x_atual, y0), (x_atual + largura, y0), (x_atual, y1)],
+                    closed=True, facecolor=cor, edgecolor=cor, alpha=0.35, linewidth=1.0,
+                )
+            else:
+                p_max = valor / h_dia
+                largura = p_max * escala_emp
+                poly = patches.Polygon(
+                    [(x_atual, y0), (x_atual + largura, y0),
+                     (x_atual + largura, y1), (x_atual, y1)],
+                    closed=True, facecolor=cor, edgecolor=cor, alpha=0.35, linewidth=1.0,
+                )
+            ax1.add_patch(poly)
 
-    # Peso de água
-    peso_agua = resultados_estabilidade.get('peso_agua', 0)
-    if 'peso_agua' in resultados_estabilidade:
-        nomes_cargas.append("Peso de Água")
-        braco_agua_PT = resultados_estabilidade.get('braco_agua_PT', 0)
-        momento_agua_PT = resultados_estabilidade.get('momento_agua_PT', 0)
-        braco_agua_CG = resultados_estabilidade.get('braco_agua_CG', 0)
-        momento_agua_CG = resultados_estabilidade.get('momento_agua_CG', 0)
-        dados_tabela.append([f"{peso_agua:.2f}", f"{braco_agua_PT:.2f}", f"{momento_agua_PT:.2f}", f"{braco_agua_CG:.2f}", f"{momento_agua_CG:.2f}"])
+            n_setas = 5
+            for i in range(1, n_setas + 1):
+                frac = i / (n_setas + 1)
+                yi = y1 - (y1 - y0) * frac
+                if forma == 'tri':
+                    p_yi = p_max * frac
+                else:
+                    p_yi = p_max
+                largura_yi = p_yi * escala_emp
+                if largura_yi <= 1e-3:
+                    continue
+                ax1.annotate(
+                    '', xy=(x_atual, yi), xytext=(x_atual + largura_yi, yi),
+                    arrowprops=dict(arrowstyle='->', color=cor, lw=0.8, alpha=0.7),
+                )
 
-    # Empuxo de água
-    if 'e_agua' in resultados_estabilidade:
-        nomes_cargas.append("Empuxo de Água")
-        braco_e_agua_PT = resultados_estabilidade.get('braco_e_agua_PT', 0)
-        momento_e_agua_PT = resultados_estabilidade.get('momento_e_agua_PT', 0)
-        braco_e_agua_CG = resultados_estabilidade.get('braco_e_agua_CG', 0)
-        momento_e_agua_CG = resultados_estabilidade.get('momento_e_agua_CG', 0)
-        dados_tabela.append([f"{e_agua:.2f}", f"{braco_e_agua_PT:.2f}", f"{momento_e_agua_PT:.2f}", f"{braco_e_agua_CG:.2f}", f"{momento_e_agua_CG:.2f}"])
-    
-    # Empuxo de sobrecarga do solo
-    if 'e_sobre' in resultados_estabilidade and abs(e_sobre) > 1e-9:
-        nomes_cargas.append("Empuxo horizontal (sobrecarga)")
-        braco_e_sobre_PT = resultados_estabilidade.get('braco_e_sobre_PT', resultados_estabilidade.get('braco_e_sobre_CG', 0))
-        braco_e_sobre_CG = resultados_estabilidade.get('braco_e_sobre_CG', 0)
-        momento_e_sobre_PT = e_sobre * braco_e_sobre_PT
-        momento_e_sobre_CG = resultados_estabilidade.get('momento_e_sobre_CG', 0)
-        dados_tabela.append([
-            f"{e_sobre:.2f}",
-            f"{braco_e_sobre_PT:.2f}",
-            f"{momento_e_sobre_PT:.2f}",
-            f"{braco_e_sobre_CG:.2f}",
-            f"{momento_e_sobre_CG:.2f}",
-        ])
+            y_seta = braco_pt
+            ax1.annotate(
+                '', xy=(x_atual - 0.45, y_seta), xytext=(x_atual + largura + 0.05, y_seta),
+                arrowprops=dict(arrowstyle='->', color=cor, lw=2.0),
+            )
+            ax1.text(
+                x_atual + largura + 0.08, y_seta + 0.05,
+                f"{nome} = {valor:.1f} kN/m",
+                fontsize=8, color=cor, ha='left', va='bottom',
+            )
 
-    # Carga vertical estabilizante da sobrecarga a montante (q × largura do talão)
-    peso_sobre_tab = resultados_estabilidade.get('peso_sobre', 0)
-    if abs(peso_sobre_tab) > 1e-9:
-        nomes_cargas.append("Sobrecarga vertical (montante)")
-        braco_sobre_PT = resultados_estabilidade.get('braco_sobre_PT', 0)
-        momento_sobre_PT = resultados_estabilidade.get('momento_sobre_PT', 0)
-        braco_sobre_CG = resultados_estabilidade.get('braco_sobre_CG', 0)
-        momento_sobre_CG = resultados_estabilidade.get('momento_sobre_CG', 0)
-        dados_tabela.append([
-            f"{peso_sobre_tab:.2f}",
-            f"{braco_sobre_PT:.2f}",
-            f"{momento_sobre_PT:.2f}",
-            f"{braco_sobre_CG:.2f}",
-            f"{momento_sobre_CG:.2f}",
-        ])
-    
-    # Se não há todos os dados específicos, mostrar os momentos totais
-    if not dados_tabela:
-        nomes_cargas = ["Momento Estabilizante", "Momento Desestabilizante"]
-        me = resultados_estabilidade.get('me', 0)
-        mt = resultados_estabilidade.get('mt', 0)
-        me_cg = resultados_estabilidade.get('me_cg', 0)
-        dados_tabela = [
-            [f"{me:.2f}", "-", "-", "-", "-"],
-            [f"{mt:.2f}", "-", "-", "-", "-"],
-            [f"{me_cg:.2f}", "-", "-", "-", "-"]
-        ]
-    
-    # Criar a tabela
-    # Se temos dados suficientes para a tabela
-    if dados_tabela:
-        tbl = plt.table(
-            cellText=dados_tabela,
-            rowLabels=nomes_cargas,
-            colLabels=["Carga (kN/m)", "Braço PT (m)", "Momento PT (kN.m/m)", "Braço CG (m)", "Momento CG (kN.m/m)"],
-            cellLoc='center',
-            loc='bottom',
-            # bbox=[0.5, -0.3, 0.45, 0.2]  # Posiciona a tabela abaixo do gráfico
-        )
-        
-        # Ajustar tamanho das fontes da tabela
-        tbl.auto_set_font_size(False)
-        tbl.set_fontsize(8)
-        tbl.scale(1, 1.5)
+            x_cota = x_atual + largura + 1.05
+            ax1.annotate(
+                '', xy=(x_cota, 0), xytext=(x_cota, y_seta),
+                arrowprops=dict(arrowstyle='<->', color=cor, lw=0.9, linestyle='--'),
+            )
+            ax1.text(
+                x_cota + 0.05, y_seta / 2, f"z = {braco_pt:.2f} m",
+                fontsize=8, color=cor, va='center', ha='left',
+            )
+            x_atual = x_cota + 0.65
+        x_diag_fim = x_atual
+    else:
+        x_diag_fim = x_aterro_max + 0.5
 
-    plt.tight_layout()
-    #plt.subplots_adjust(bottom=0.5)  # Ajustar espaço na parte inferior para acomodar a tabela
+    # =====================================================================
+    # 5) Diagrama trapezoidal de tensões na base
+    # =====================================================================
+    altura_tensao = 0.7
+    p_max_ref = max(tensao_max_v, abs(tensao_min_v), pressao_adm, 1e-6)
+    escala_p = altura_tensao / p_max_ref
+
+    y_top = -sub_h - 0.3
+    y_max_t = y_top - tensao_max_v * escala_p
+    y_min_t = y_top - tensao_min_v * escala_p
+    trap = patches.Polygon(
+        [(0, y_top), (b_total, y_top), (b_total, y_min_t), (0, y_max_t)],
+        closed=True, facecolor='#abebc6', edgecolor='#1e8449', alpha=0.75, linewidth=1.2,
+    )
+    ax1.add_patch(trap)
+    ax1.plot([0, 0], [y_top, y_max_t], color='#1e8449', linewidth=1.2)
+    ax1.plot([b_total, b_total], [y_top, y_min_t], color='#1e8449', linewidth=1.2)
+
+    ax1.text(
+        -0.05, y_max_t - 0.05, f"σ_máx = {tensao_max_v:.1f} kN/m²",
+        ha='left', va='top', fontsize=9, color='#1e8449',
+    )
+    ax1.text(
+        b_total + 0.05, y_min_t - 0.05, f"σ_mín = {tensao_min_v:.1f} kN/m²",
+        ha='right', va='top', fontsize=9, color='#1e8449',
+    )
+    y_p_adm = y_top - pressao_adm * escala_p
+    ax1.plot([-0.1, b_total + 0.1], [y_p_adm, y_p_adm],
+             color='red', linestyle='--', linewidth=1.2)
+    ax1.text(
+        b_total + 0.05, y_p_adm + 0.05, f"σ_adm = {pressao_adm:.1f} kN/m²",
+        ha='left', va='bottom', fontsize=9, color='red',
+    )
+
+    # =====================================================================
+    # 6) Cotas técnicas
+    # =====================================================================
+    x_cota_H = -0.6
+    ax1.annotate(
+        '', xy=(x_cota_H, 0), xytext=(x_cota_H, h),
+        arrowprops=dict(arrowstyle='<->', color='black', lw=1.0),
+    )
+    ax1.text(
+        x_cota_H - 0.12, h / 2, f"H = {h:.2f} m",
+        rotation=90, ha='right', va='center', fontsize=10,
+    )
+
+    x_cota_hu = b_jus - 0.20
+    ax1.annotate(
+        '', xy=(x_cota_hu, d), xytext=(x_cota_hu, h),
+        arrowprops=dict(arrowstyle='<->', color='black', lw=0.9),
+    )
+    ax1.text(
+        x_cota_hu - 0.05, (d + h) / 2, f"h_útil = {h - d:.2f} m",
+        rotation=90, ha='right', va='center', fontsize=9,
+    )
+
+    y_cota_d = d + 0.18
+    ax1.annotate(
+        '', xy=(b_jus, y_cota_d), xytext=(b_jus + d, y_cota_d),
+        arrowprops=dict(arrowstyle='<->', color='black', lw=0.9),
+    )
+    ax1.text(
+        b_jus + d / 2, y_cota_d + 0.05, f"d = {d:.2f} m",
+        ha='center', va='bottom', fontsize=9,
+    )
+
+    y_cota_b = -0.20
+    ax1.annotate(
+        '', xy=(0, y_cota_b), xytext=(b_total, y_cota_b),
+        arrowprops=dict(arrowstyle='<->', color='black', lw=1.0),
+    )
+    ax1.text(
+        b_total / 2, y_cota_b - 0.06, f"B = {b_total:.2f} m",
+        ha='center', va='top', fontsize=10,
+    )
+    y_subcota = y_cota_b - 0.28
+    ax1.annotate(
+        '', xy=(0, y_subcota), xytext=(b_jus, y_subcota),
+        arrowprops=dict(arrowstyle='<->', color='dimgray', lw=0.8),
+    )
+    ax1.text(
+        b_jus / 2, y_subcota - 0.05, f"b_jus = {b_jus:.2f}",
+        ha='center', va='top', fontsize=8, color='dimgray',
+    )
+    ax1.annotate(
+        '', xy=(b_jus, y_subcota), xytext=(b_total, y_subcota),
+        arrowprops=dict(arrowstyle='<->', color='dimgray', lw=0.8),
+    )
+    ax1.text(
+        (b_jus + b_total) / 2, y_subcota - 0.05, f"b_mon = {b_mon:.2f}",
+        ha='center', va='top', fontsize=8, color='dimgray',
+    )
+
+    # =====================================================================
+    # 7) Configuração do eixo do desenho
+    # =====================================================================
+    x_lim_max = max(x_diag_fim + 0.4, b_total + 3.2)
+    y_lim_min = min(y_max_t, y_min_t, y_subcota) - 0.4
+    y_lim_max = h + 0.9 + (0.25 if sobrecarga_mon > 0 else 0)
+    ax1.set_xlim(-folga_esq - 0.2, x_lim_max)
+    ax1.set_ylim(y_lim_min, y_lim_max)
+    ax1.set_aspect('equal')
+    ax1.set_title('Seção do Muro de Arrimo à Flexão')
+    ax1.set_xlabel('Largura (m)')
+    ax1.set_ylabel('Cota (m)')
+    ax1.grid(True, linestyle=':', alpha=0.4)
+
+    legend_handles = [
+        patches.Patch(facecolor='#bdbdbd', edgecolor='black', label='Concreto'),
+        patches.Patch(facecolor='#ead8a6', edgecolor='#7a5a1e', hatch='....', label='Aterro'),
+        patches.Patch(facecolor='#e0c89c', edgecolor='#7a5a1e', hatch='///', label='Solo natural'),
+    ]
+    if sobrecarga_mon > 0:
+        legend_handles.append(patches.Patch(facecolor='#ffd966', edgecolor='#a37000',
+                                            hatch='xxx', label='Sobrecarga q'))
+    if componentes:
+        legend_handles.append(patches.Patch(facecolor='#c0392b', alpha=0.35,
+                                            label='Empuxos'))
+    legend_handles.append(patches.Patch(facecolor='#abebc6', edgecolor='#1e8449',
+                                        label='Tensões na base'))
+    ax1.legend(handles=legend_handles, loc='upper left', fontsize=8, framealpha=0.85)
+
+    # =====================================================================
+    # 8) Resumo textual (ax2)
+    # =====================================================================
+    ax2.axis('off')
+    ax2.set_title('Resumo', fontsize=11, loc='left')
+
+    volume_concreto = (b_mon + b_jus + h) * d
+    peso_terra, x_cg, volume_aterro, volume_corte = calcular_peso_terra_montante(
+        h, b_mon, gamma_solo_sat, gamma_solo_sub
+    )
+    solo_carga = volume_aterro - volume_concreto
+
+    relatorio = (
+        f"Quantitativos\n"
+        f"  1. Área de aço:       {as_final:.2f} cm²/m\n"
+        f"  2. Volume concreto:   {volume_concreto:.2f} m³/m\n"
+        f"  3. Solo - corte:      {volume_corte:.2f} m³/m\n"
+        f"  4. Solo - aterro:     {volume_aterro:.2f} m³/m\n"
+        f"  5. Solo - carga[+]/descarga[-]: {solo_carga:.2f} m³/m\n\n"
+
+        f"Estabilidade (carregamento normal)\n"
+        f"  1. FS deslizamento: {resultados_estabilidade['fs_deslizamento_total']:.2f} "
+        f"{'(OK)' if resultados_estabilidade['fs_deslizamento_ok'] else '(NÃO OK)'}\n"
+        f"  2. FS tombamento:   {abs(resultados_estabilidade['fs_tombamento']):.2f} "
+        f"{'(OK)' if resultados_estabilidade['fs_tombamento_ok'] else '(NÃO OK)'}\n"
+        f"  3. σ máx: {resultados_estabilidade['tensao_max']:.2f} kN/m² "
+        f"{'(OK)' if resultados_estabilidade['pressao_adm_ok'] else '(NÃO OK)'}\n"
+        f"  4. σ mín: {resultados_estabilidade['tensao_min']:.2f} kN/m² "
+        f"{'(OK)' if resultados_estabilidade['tensao_min'] > 0 else '(LEVANTAMENTO)'}\n"
+        f"  5. B teórica: {base_teorica:.2f} m | B atual: {b_total:.2f} m "
+        f"({'OK' if base_ok else 'NÃO OK'})\n"
+        f"  6. ELS - δ topo: {resultados_estabilidade['deslocamento_topo_mm']:.2f} mm "
+        f"(lim. h/500 = {resultados_estabilidade['limite_deslocamento_mm']:.2f} mm) "
+        f"{'OK' if resultados_estabilidade['deslocamento_ok'] else 'NÃO OK'}\n"
+        f"     ELS ref.: q triangular = {resultados_estabilidade.get('els_q_base_kN_m', 0):.2f} kN/m, "
+        f"q uniforme = {resultados_estabilidade.get('els_q_uniforme_kN_m', 0):.2f} kN/m\n\n"
+
+        f"Dimensionamento\n"
+        f"  1. φ barra:       {resultados_dimensionamento['dia_barra']:.2f} mm\n"
+        f"  2. Espaçamento:   {resultados_dimensionamento['espacamento']:.2f} cm\n"
+        f"  3. As mín:        {resultados_dimensionamento['as_min']:.2f} cm²\n"
+        f"  4. As calc:       {resultados_dimensionamento['as_calc']:.2f} cm²\n"
+        f"  5. As final:      {resultados_dimensionamento['as_final']:.2f} cm²\n"
+        f"  6. Momento:       {resultados_dimensionamento['momento']:.2f} kN·m\n"
+        f"  7. x/d: {resultados_dimensionamento['x_d']:.3f} | fck: {resultados_dimensionamento['fck']:.0f} MPa"
+    )
+    ax2.text(0, 1, relatorio, fontsize=9, va='top', ha='left', family='monospace')
+
+    if not base_ok:
+        avisos = []
+        if not resultados_estabilidade.get('base_atual_ok', True):
+            avisos.append(
+                f"Base atual insuficiente (faltam ≈ {base_teorica - b_total:.2f} m)"
+            )
+        if not resultados_estabilidade.get('base_max_ok', True):
+            avisos.append("Base teórica excede o limite máximo permitido")
+        if avisos:
+            plt.figtext(
+                0.5, 0.01, " | ".join(avisos),
+                ha='center', fontsize=11, color='red',
+                bbox={"facecolor": "yellow", "alpha": 0.5, "pad": 5},
+            )
+
+    # =====================================================================
+    # 9) Tabela completa de cargas, braços e momentos
+    # =====================================================================
+    def _g(key, default=0.0):
+        return resultados_estabilidade.get(key, default)
+
+    linhas = []
+    cores_linhas = []
+    cor_vert = '#e8f6f3'
+    cor_horiz = '#fdf2e9'
+
+    linhas.append((
+        "Peso do muro (↓)", _g('peso_muro'),
+        _g('braco_muro_PT'), _g('momento_muro_PT'),
+        _g('braco_muro_CG'), _g('momento_muro_CG'),
+    ))
+    cores_linhas.append(cor_vert)
+
+    linhas.append((
+        "Peso do solo saturado (↓)", _g('peso_solo_sat'),
+        _g('braco_solo_sat_PT'), _g('momento_solo_PT'),
+        _g('braco_solo_sat_CG'), _g('momento_solo_CG'),
+    ))
+    cores_linhas.append(cor_vert)
+
+    if nivel_agua > 0 or abs(_g('peso_solo_sub')) > 1e-9:
+        linhas.append((
+            "Peso do solo submerso (↓)", _g('peso_solo_sub'),
+            _g('braco_solo_sub_PT'), _g('momento_solo_sub_PT'),
+            _g('braco_solo_sub_CG'), _g('momento_solo_sub_CG'),
+        ))
+        cores_linhas.append(cor_vert)
+        linhas.append((
+            "Peso de água sobre a base (↓)", _g('peso_agua'),
+            _g('braco_agua_PT'), _g('momento_agua_PT'),
+            _g('braco_agua_CG'), _g('momento_agua_CG'),
+        ))
+        cores_linhas.append(cor_vert)
+
+    if abs(_g('peso_sobre')) > 1e-9:
+        linhas.append((
+            "Sobrecarga vertical no talão (↓)", _g('peso_sobre'),
+            _g('braco_sobre_PT'), _g('momento_sobre_PT'),
+            _g('braco_sobre_CG'), _g('momento_sobre_CG'),
+        ))
+        cores_linhas.append(cor_vert)
+
+    if abs(forca_subpressao) > 1e-9:
+        linhas.append((
+            "Subpressão na base (↑)", -abs(forca_subpressao),
+            _g('braco_subpressao_PT'), _g('momento_subpressao_PT'),
+            _g('braco_subpressao_CG'), _g('momento_subpressao_CG'),
+        ))
+        cores_linhas.append(cor_vert)
+
+    if abs(_g('e0_solo_sat')) > 1e-9:
+        linhas.append((
+            "Empuxo do solo saturado (→)", _g('e0_solo_sat'),
+            _g('braco_e0_solo_sat_PT'), _g('momento_e0_solo_sat_PT'),
+            _g('braco_e0_solo_sat_CG'), _g('momento_e0_solo_sat_CG'),
+        ))
+        cores_linhas.append(cor_horiz)
+    if abs(_g('e0_solo_sub')) > 1e-9:
+        linhas.append((
+            "Empuxo do solo submerso (→)", _g('e0_solo_sub'),
+            _g('braco_e0_solo_sub_PT'), _g('momento_e0_solo_sub_PT'),
+            _g('braco_e0_solo_sub_CG'), _g('momento_e0_solo_sub_CG'),
+        ))
+        cores_linhas.append(cor_horiz)
+    if abs(_g('e0_agua')) > 1e-9:
+        linhas.append((
+            "Empuxo de água (→)", _g('e0_agua'),
+            _g('braco_e0_agua_PT'), _g('momento_e0_agua_PT'),
+            _g('braco_e0_agua_CG'), _g('momento_e0_agua_CG'),
+        ))
+        cores_linhas.append(cor_horiz)
+    if abs(_g('e_sobre')) > 1e-9:
+        linhas.append((
+            "Empuxo de sobrecarga (→)", _g('e_sobre'),
+            _g('braco_e_sobre_PT'), _g('momento_e_sobre_PT'),
+            _g('braco_e_sobre_CG'), _g('momento_e_sobre_CG'),
+        ))
+        cores_linhas.append(cor_horiz)
+
+    soma_V = _g('forca_normal')
+    soma_H = _g('e0')
+    me_pt = _g('me')
+    mt_pt = _g('mt')
+    me_cg_val = _g('me_cg')
+
+    linhas.append((
+        "ΣV (normal na base)", soma_V, "—", me_pt, "—", me_cg_val,
+    ))
+    cores_linhas.append('#d6eaf8')
+    linhas.append((
+        "ΣH e M tombamento", soma_H, "—", mt_pt, "—", "—",
+    ))
+    cores_linhas.append('#fadbd8')
+
+    def _fmt(v):
+        if isinstance(v, str):
+            return v
+        try:
+            return f"{v:.2f}"
+        except Exception:
+            return str(v)
+
+    row_labels = [linha[0] for linha in linhas]
+    cell_text = [[_fmt(linha[1]), _fmt(linha[2]), _fmt(linha[3]),
+                  _fmt(linha[4]), _fmt(linha[5])] for linha in linhas]
+
+    tbl = ax_tabela.table(
+        cellText=cell_text,
+        rowLabels=row_labels,
+        colLabels=[
+            "F (kN/m)", "Braço PT (m)", "Momento PT (kN·m/m)",
+            "Braço CG (m)", "Momento CG (kN·m/m)",
+        ],
+        cellLoc='center',
+        rowLoc='left',
+        loc='center',
+    )
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(9)
+    tbl.scale(1, 1.4)
+
+    for i, cor in enumerate(cores_linhas):
+        for j in range(5):
+            tbl[(i + 1, j)].set_facecolor(cor)
+        try:
+            tbl[(i + 1, -1)].set_facecolor(cor)
+        except KeyError:
+            pass
+
+    ax_tabela.set_title(
+        'Cargas, braços e momentos — PT = ponto de tombamento (bordo de jusante); CG = centro da base',
+        fontsize=10, loc='left',
+    )
+
+    plt.subplots_adjust(left=0.06, right=0.98, top=0.94, bottom=0.05)
     plt.show()
 
 
@@ -2199,6 +2362,18 @@ def verificar_estabilidade_flexao(h, d, b_jus, b_mon, gamma_solo_sat, gamma_solo
         limite_relativo=500
     )
     
+    # Momentos das componentes horizontais (em torno do PT, na base; CG vertical idêntico)
+    momento_e0_solo_sat_PT = e0_solo_sat * braco_e0_solo_sat
+    momento_e0_solo_sub_PT = e0_solo_sub * braco_e0_solo_sub
+    momento_e0_agua_PT = e0_agua * braco_e0_agua
+    momento_e_sobre_PT = e_sobre * braco_e_sobre_PT
+    momento_e0_total_PT = (
+        momento_e0_solo_sat_PT
+        + momento_e0_solo_sub_PT
+        + momento_e0_agua_PT
+        + momento_e_sobre_PT
+    )
+
     return {
         'fs_tombamento': fs_tombamento,
         'nivel_agua': nivel_agua,
@@ -2246,18 +2421,46 @@ def verificar_estabilidade_flexao(h, d, b_jus, b_mon, gamma_solo_sat, gamma_solo
         'momento_sobre_PT': momento_sobre_PT,
         'momento_sobre_CG': momento_sobre_CG,
         'momento_e_sobre_CG': momento_e_sobre_CG,
+        'momento_e_sobre_PT': momento_e_sobre_PT,
         'e_sobre': e_sobre,
         'braco_e_sobre_PT': braco_e_sobre_PT,
         'braco_e_sobre_CG': braco_e_sobre_CG,
         'e0': e0,
         'e_agua': e0_agua,
         'braco_e0': braco_e0,
+        'braco_e0_PT': braco_e0,
+        'braco_e0_CG': braco_e0,
+        'momento_e0_PT': e0 * braco_e0,
+        'momento_e0_CG': e0 * braco_e0,
+        'momento_e0_total_PT': momento_e0_total_PT,
+        'braco_e0_solo_sat': braco_e0_solo_sat,
+        'braco_e0_solo_sat_PT': braco_e0_solo_sat,
+        'braco_e0_solo_sat_CG': braco_e0_solo_sat,
+        'momento_e0_solo_sat_PT': momento_e0_solo_sat_PT,
+        'momento_e0_solo_sat_CG': momento_e0_solo_sat_PT,
+        'braco_e0_solo_sub': braco_e0_solo_sub,
+        'braco_e0_solo_sub_PT': braco_e0_solo_sub,
+        'braco_e0_solo_sub_CG': braco_e0_solo_sub,
+        'momento_e0_solo_sub_PT': momento_e0_solo_sub_PT,
+        'momento_e0_solo_sub_CG': momento_e0_solo_sub_PT,
+        'braco_e0_agua': braco_e0_agua,
+        'braco_e0_agua_PT': braco_e0_agua,
+        'braco_e0_agua_CG': braco_e0_agua,
+        'braco_e_agua_PT': braco_e0_agua,
+        'braco_e_agua_CG': braco_e0_agua,
+        'momento_e0_agua_PT': momento_e0_agua_PT,
+        'momento_e0_agua_CG': momento_e0_agua_PT,
+        'momento_e_agua_PT': momento_e0_agua_PT,
+        'momento_e_agua_CG': momento_e0_agua_PT,
         'mt': mt,
         'me': me,
         'me_cg': me_cg,
         'forca_normal': forca_normal,
         'forca_subpressao': forca_subpressao,
         'braco_subpressao_PT': braco_subpressao_PT,
+        'braco_subpressao_CG': braco_subpressao_CG,
+        'momento_subpressao_PT': momento_subpressao_pt,
+        'momento_subpressao_CG': momento_subpressao_cg,
         'modo_subpressao': modo_subpressao,
         'cg_base': cg_base,
         'e0_agua': e0_agua,
@@ -3419,14 +3622,14 @@ def _motivo_falha_linha_parametrica(linha):
     return str(linha.get("observacao", "")).strip()
 
 
-def _mostrar_tabela_parametrica(titulo, nome_arquivo, linhas):
+def _mostrar_tabela_parametrica(titulo, linhas):
     janela = tk.Toplevel()
     janela.title(titulo)
     janela.geometry("1320x680")
 
     tk.Label(
         janela,
-        text=f"Resultado salvo em: {nome_arquivo}",
+        text=titulo,
         font=("Arial", 10, "bold"),
         fg="darkgreen"
     ).pack(anchor="w", padx=10, pady=(10, 5))
@@ -3524,6 +3727,7 @@ def executar_estudo_parametrico(tipo_estudo, inicio, fim, passo_variavel, base_m
     Executa estudo paramétrico focado em:
     - Altura do muro (H): em cada ponto fixa-se d = H/10 (espessura proporcional à altura).
     - Espessura/altura útil do muro de flexão (d): varia d mantendo H o da interface.
+    - Ângulo de atrito (phi): varia phi do solo (em graus) mantendo H e d da interface.
 
     Muro de flexão: busca-se a menor largura a montante estável variando somente essa dimensão;
     a largura a jusante permanece a informada na interface.
@@ -3545,6 +3749,7 @@ def executar_estudo_parametrico(tipo_estudo, inicio, fim, passo_variavel, base_m
         b_jus_original = float(entry_b_jus.get())
         b_mon_original = float(entry_b_mon.get())
         b_grav_original = float(entry_b_gravidade.get())
+        phi_original = float(entry_phi_estabilidade.get())
 
         if base_min <= 0:
             raise ValueError("Base mínima deve ser > 0.")
@@ -3569,6 +3774,13 @@ def executar_estudo_parametrico(tipo_estudo, inicio, fim, passo_variavel, base_m
             elif tipo_estudo == "espessura":
                 entry_d.delete(0, tk.END)
                 entry_d.insert(0, f"{valor:.6g}")
+            elif tipo_estudo == "phi":
+                if valor <= 0 or valor >= 45:
+                    raise ValueError(
+                        "Ângulo de atrito deve estar entre 0 e 45 graus (limites do programa)."
+                    )
+                entry_phi_estabilidade.delete(0, tk.END)
+                entry_phi_estabilidade.insert(0, f"{valor:.6g}")
             else:
                 raise ValueError("Tipo de estudo inválido.")
 
@@ -3675,27 +3887,9 @@ def executar_estudo_parametrico(tipo_estudo, inicio, fim, passo_variavel, base_m
         entry_b_mon.insert(0, f"{b_mon_original:.6g}")
         entry_b_gravidade.delete(0, tk.END)
         entry_b_gravidade.insert(0, f"{b_grav_original:.6g}")
+        entry_phi_estabilidade.delete(0, tk.END)
+        entry_phi_estabilidade.insert(0, f"{phi_original:.6g}")
         calcular()
-
-        sufixo = "altura" if tipo_estudo == "altura" else "espessura"
-        nome_arquivo = f"estudo_parametrico_{sufixo}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        caminho_csv = os.path.join(os.path.dirname(os.path.abspath(__file__)), nome_arquivo)
-
-        campos_csv = [
-            "tipo_estudo", "variavel_valor",
-            "base_flexao_total", "base_gravidade",
-            "custo_flexao", "custo_gravidade",
-            "tempo_flexao_h", "tempo_gravidade_h",
-            "desloc_flexao_mm", "desloc_gravidade_mm",
-            "estab_flexao", "estab_gravidade",
-            "observacao",
-            "motivo_nao_calculado",
-        ]
-
-        with open(caminho_csv, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=campos_csv, delimiter=";")
-            writer.writeheader()
-            writer.writerows(linhas)
 
         if not linhas:
             messagebox.showwarning(
@@ -3704,15 +3898,25 @@ def executar_estudo_parametrico(tipo_estudo, inicio, fim, passo_variavel, base_m
             )
             return
 
-        titulo_tabela = "Estudo Paramétrico (Base Otimizada) por Altura" if tipo_estudo == "altura" else "Estudo Paramétrico (Base Otimizada) por Espessura"
-        _mostrar_tabela_parametrica(titulo_tabela, nome_arquivo, linhas)
+        titulos_map = {
+            "altura": "Estudo Paramétrico (Base Otimizada) por Altura",
+            "espessura": "Estudo Paramétrico (Base Otimizada) por Espessura",
+            "phi": "Estudo Paramétrico (Base Otimizada) por Ângulo de Atrito",
+        }
+        titulo_tabela = titulos_map.get(tipo_estudo, "Estudo Paramétrico (Base Otimizada)")
+        _mostrar_tabela_parametrica(titulo_tabela, linhas)
 
         linhas_plot = [l for l in linhas if not _motivo_falha_linha_parametrica(l)]
         if linhas_plot:
             eixo_x = [linha["variavel_valor"] for linha in linhas_plot]
             custos_f = [linha["custo_flexao"] for linha in linhas_plot]
             custos_g = [linha["custo_gravidade"] for linha in linhas_plot]
-            xlabel = "Altura H (m)" if tipo_estudo == "altura" else "Espessura d (m)"
+            xlabels_map = {
+                "altura": "Altura H (m)",
+                "espessura": "Espessura d (m)",
+                "phi": "Ângulo de atrito φ (graus)",
+            }
+            xlabel = xlabels_map.get(tipo_estudo, "Variável")
             _plotar_parametrico(
                 eixo_x,
                 custos_f,
@@ -3741,7 +3945,7 @@ def abrir_estudo_parametrico_popup():
         janela,
         textvariable=tipo_var,
         state="readonly",
-        values=["altura", "espessura"],
+        values=["altura", "espessura", "phi"],
         width=18
     )
     combo_tipo.grid(row=0, column=1, padx=10, pady=8)
@@ -3760,6 +3964,26 @@ def abrir_estudo_parametrico_popup():
     entry_passo = tk.Entry(janela, width=20)
     entry_passo.insert(0, "0.5")
     entry_passo.grid(row=3, column=1, padx=10, pady=5)
+
+    # Ajusta valores default da série conforme o tipo de estudo escolhido
+    defaults_serie = {
+        "altura":    {"inicio": "3.0",  "fim": "8.0",  "passo": "0.5"},
+        "espessura": {"inicio": "0.3",  "fim": "0.8",  "passo": "0.05"},
+        "phi":       {"inicio": "20",   "fim": "40",   "passo": "2"},
+    }
+
+    def _aplicar_defaults_para_tipo(*_args):
+        cfg = defaults_serie.get(tipo_var.get())
+        if not cfg:
+            return
+        entry_inicio.delete(0, tk.END)
+        entry_inicio.insert(0, cfg["inicio"])
+        entry_fim.delete(0, tk.END)
+        entry_fim.insert(0, cfg["fim"])
+        entry_passo.delete(0, tk.END)
+        entry_passo.insert(0, cfg["passo"])
+
+    combo_tipo.bind("<<ComboboxSelected>>", _aplicar_defaults_para_tipo)
 
     tk.Label(janela, text="Base mínima (m):").grid(row=4, column=0, padx=10, pady=5, sticky="e")
     entry_base_min = tk.Entry(janela, width=20)
@@ -3781,6 +4005,8 @@ def abrir_estudo_parametrico_popup():
         text=(
             "Altura: varia H e adota d = H/10 (espessura do fuste proporcional à altura).\n"
             "Espessura: varia d mantendo H conforme a interface.\n"
+            "Phi: varia o ângulo de atrito do solo (em graus, usado na estabilidade)\n"
+            "mantendo H e d conforme a interface.\n"
             "Para cada ponto, busca a menor largura a montante estável (jusante fixo) no muro de flexão\n"
             "e a menor base estável no muro de gravidade. Limites mín./máx. da busca aplicam-se à largura montante (flexão) e à base (gravidade)."
         ),
